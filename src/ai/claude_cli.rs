@@ -21,7 +21,10 @@
 //! so the CLI must not act on it. `--print` alone keeps Claude Code's built-in
 //! tools (Bash, file read and edit); `build_claude_args` removes them with
 //! `--tools ""` and removes MCP tools with `--disallowedTools "mcp__*"` and
-//! `--strict-mcp-config`, leaving a text-completion backend.
+//! `--strict-mcp-config`, leaving a text-completion backend. `--safe-mode`
+//! keeps the operator's CLAUDE.md, hooks and plugins out of the call: each
+//! stage would otherwise carry the operator's own instructions to the model
+//! and run their hooks once per request.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -127,6 +130,7 @@ pub fn build_claude_args(model: &str, effort: Option<&str>) -> Vec<String> {
         "--disallowedTools".to_string(),
         "mcp__*".to_string(),
         "--strict-mcp-config".to_string(),
+        "--safe-mode".to_string(),
         "--model".to_string(),
         model.to_string(),
     ];
@@ -598,6 +602,7 @@ mod tests {
         let denied = args.iter().position(|a| a == "--disallowedTools").unwrap();
         assert_eq!(args[denied + 1], "mcp__*");
         assert!(args.contains(&"--strict-mcp-config".to_string()));
+        assert!(args.contains(&"--safe-mode".to_string()));
         assert!(args.contains(&"--print".to_string()));
     }
 

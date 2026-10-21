@@ -94,6 +94,8 @@ Context window sizes:
 - No API key needed -- uses Claude Code's subscription auth.
 - Stateless: spawns `claude --print --output-format json` per request.
   No tool access, no file access, no session reuse.
+- Runs with `--safe-mode`, so your own CLAUDE.md, hooks and plugins
+  don't reach the review.
 - Prompt caching handled automatically by Claude Code.
 - `effort` controls the model's thinking budget. Opus 4.7 uses adaptive
   thinking; Sonnet 4.6 and Haiku 4.5 use extended thinking. If you need
