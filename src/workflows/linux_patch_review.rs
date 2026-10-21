@@ -809,7 +809,7 @@ pub fn format_post_verification_feedback(violation: &str) -> String {
     )
 }
 
-fn validate_inline_format(content: &str, _state: &LinuxPatchReviewState) -> Result<(), String> {
+pub fn validate_inline_format(content: &str, _state: &LinuxPatchReviewState) -> Result<(), String> {
     if content.lines().any(|l| l.trim_start().starts_with("```")) {
         return Err("The output contains Markdown code blocks ('```'). It must be plain text as per `inline-template.md`.".to_string());
     }
@@ -847,7 +847,7 @@ fn validate_inline_format(content: &str, _state: &LinuxPatchReviewState) -> Resu
     Ok(())
 }
 
-fn format_inline_feedback(violation: &str) -> String {
+pub fn format_inline_feedback(violation: &str) -> String {
     format!(
         "\n\nPrevious attempt was rejected: {}. Please fix the formatting to match the standard plain text LKML review format with proper headers and '> ' quoted context.",
         violation
