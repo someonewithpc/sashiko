@@ -17,14 +17,16 @@
 //!
 //! ## Safety
 //!
-//! The prompt carries patch text from anyone who can post to a reviewed list,
-//! so the CLI must not act on it. `--print` alone keeps Claude Code's built-in
-//! tools (Bash, file read and edit); `build_claude_args` removes them with
-//! `--tools ""` and removes MCP tools with `--disallowedTools "mcp__*"` and
-//! `--strict-mcp-config`, leaving a text-completion backend. `--safe-mode`
-//! keeps the operator's CLAUDE.md, hooks and plugins out of the call: each
-//! stage would otherwise carry the operator's own instructions to the model
-//! and run their hooks once per request.
+//! The prompt carries patch text from anyone who can post to a reviewed list.
+//! `--print` keeps Claude Code's built-in tools (Bash, file read and edit), and
+//! they run wherever the operator's own permission settings allow them, in the
+//! directory sashiko was started in. Only review patches you trust with this
+//! provider. With `--tools ""` instead, Opus writes its native tool-call
+//! syntax as plain text and, with no tool to end on, keeps generating until
+//! the CLI timeout. `--safe-mode` keeps MCP servers and the operator's
+//! CLAUDE.md, hooks and plugins out of the call: each stage would otherwise
+//! carry the operator's own instructions to the model and run their hooks
+//! once per request.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -116,7 +118,7 @@ pub struct ClaudeCliProvider {
 }
 
 /// Returns the argv passed to `claude` (the prompt goes on stdin). Extracted
-/// so tests can assert that no tool survives.
+/// so tests can assert on it.
 pub fn build_claude_args(model: &str, effort: Option<&str>) -> Vec<String> {
     let mut args = vec![
         "--print".to_string(),
@@ -125,11 +127,6 @@ pub fn build_claude_args(model: &str, effort: Option<&str>) -> Vec<String> {
         "--no-session-persistence".to_string(),
         "--settings".to_string(),
         r#"{"verbose":false}"#.to_string(),
-        "--tools".to_string(),
-        String::new(),
-        "--disallowedTools".to_string(),
-        "mcp__*".to_string(),
-        "--strict-mcp-config".to_string(),
         "--safe-mode".to_string(),
         "--model".to_string(),
         model.to_string(),
@@ -595,13 +592,9 @@ mod tests {
     }
 
     #[test]
-    fn test_claude_args_disable_every_tool() {
+    fn test_claude_args_keep_builtin_tools_in_safe_mode() {
         let args = build_claude_args("sonnet", Some("high"));
-        let tools = args.iter().position(|a| a == "--tools").unwrap();
-        assert_eq!(args[tools + 1], "");
-        let denied = args.iter().position(|a| a == "--disallowedTools").unwrap();
-        assert_eq!(args[denied + 1], "mcp__*");
-        assert!(args.contains(&"--strict-mcp-config".to_string()));
+        assert!(!args.contains(&"--tools".to_string()));
         assert!(args.contains(&"--safe-mode".to_string()));
         assert!(args.contains(&"--print".to_string()));
     }
