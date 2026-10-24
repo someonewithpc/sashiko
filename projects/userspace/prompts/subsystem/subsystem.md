@@ -21,3 +21,4 @@ Matching any trigger is enough.
 | Hyprland and hyprutils | Hyprland, aquamarine, hyprutils, `Hyprutils::`, `SP<`, `WP<`, `makeShared`, `CSignal`, `CHyprSignalListener`, `listenStatic`, `.listen(`, `HyprlandAPI::` | hyprutils.md |
 | libwayland and wlroots | `wayland-server`, `wl_listener`, `wl_signal`, `wl_list`, `wl_resource`, `wl_client`, `wl_event_loop`, `wl_event_source`, `wlr_` | wayland.md |
 | libdrm (DRM/KMS from userspace) | `xf86drm`, `xf86drmMode`, `drmMode`, `drmIoctl`, `drmModeAtomic`, `DRM_MODE_ATOMIC_`, `DRM_MODE_PAGE_FLIP_EVENT`, `drmHandleEvent`, `drmModeConnector`, `drmModePlane`, `drmModeCrtc`, `drmModeGetConnector` | libdrm.md |
+| libfprint drivers | `libfprint/drivers/`, `fpi_`, `FpiSsm`, `FpiUsbTransfer`, `FpDevice`, `FpImageDevice`, `fpi_device_`, `fpi_ssm_` | libfprint.md |
