@@ -81,6 +81,15 @@ pub fn qemu_severity_guide() -> &'static str {
         .expect("qemu/severity.md must exist in prompt bundle")
 }
 
+/// Returns the compiled-in content of `userspace/severity.md`.
+pub fn userspace_severity_guide() -> &'static str {
+    PROMPT_BUNDLE_FILES
+        .iter()
+        .find(|(path, _)| *path == "userspace/severity.md")
+        .and_then(|(_, bytes)| std::str::from_utf8(bytes).ok())
+        .expect("userspace/severity.md must exist in prompt bundle")
+}
+
 /// Returns the compiled-in severity guide for `project`.
 pub fn severity_guide(project: ProjectId) -> &'static str {
     match project {
@@ -88,6 +97,7 @@ pub fn severity_guide(project: ProjectId) -> &'static str {
         ProjectId::Sashiko => sashiko_severity_guide(),
         ProjectId::Gcc => gcc_severity_guide(),
         ProjectId::Qemu => qemu_severity_guide(),
+        ProjectId::Userspace => userspace_severity_guide(),
     }
 }
 
@@ -179,6 +189,13 @@ mod tests {
         let guide = gcc_severity_guide();
         assert!(guide.contains("# Severity Levels"));
         assert!(guide.contains("wrong-code"));
+    }
+
+    #[test]
+    fn test_userspace_severity_guide_not_empty() {
+        let guide = userspace_severity_guide();
+        assert!(guide.contains("# Severity Levels"));
+        assert_eq!(severity_guide(ProjectId::Userspace), guide);
     }
 
     #[test]

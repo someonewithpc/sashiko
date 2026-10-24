@@ -41,6 +41,7 @@ pub enum ProjectId {
     Sashiko,
     Gcc,
     Qemu,
+    Userspace,
 }
 
 impl ProjectId {
@@ -52,6 +53,7 @@ impl ProjectId {
             ProjectId::Sashiko => "sashiko",
             ProjectId::Gcc => "gcc",
             ProjectId::Qemu => "qemu",
+            ProjectId::Userspace => "userspace",
         }
     }
 
@@ -62,6 +64,7 @@ impl ProjectId {
             ProjectId::Sashiko => "Sashiko",
             ProjectId::Gcc => "GCC",
             ProjectId::Qemu => "QEMU",
+            ProjectId::Userspace => "Userspace",
         }
     }
 
@@ -80,6 +83,7 @@ impl ProjectId {
             ProjectId::Sashiko => "sashiko",
             ProjectId::Gcc => "gcc",
             ProjectId::Qemu => "qemu",
+            ProjectId::Userspace => "userspace",
         }
     }
 
@@ -90,7 +94,7 @@ impl ProjectId {
     pub fn uses_maintainers(self) -> bool {
         match self {
             ProjectId::Linux => true,
-            ProjectId::Sashiko | ProjectId::Gcc | ProjectId::Qemu => false,
+            ProjectId::Sashiko | ProjectId::Gcc | ProjectId::Qemu | ProjectId::Userspace => false,
         }
     }
 
@@ -105,9 +109,21 @@ impl ProjectId {
             ProjectId::Linux => {
                 crate::authority::TrustedBots(&["lkp@intel.com", "*@syzkaller.appspotmail.com"])
             }
-            ProjectId::Sashiko | ProjectId::Gcc | ProjectId::Qemu => {
+            ProjectId::Sashiko | ProjectId::Gcc | ProjectId::Qemu | ProjectId::Userspace => {
                 crate::authority::TrustedBots(&[])
             }
+        }
+    }
+
+    /// Whether the bug pipeline and bug database know this project.
+    ///
+    /// The daemon and `sashiko benchmark` run the Reviewer, which queues bugs,
+    /// so they serve only these projects. The userspace profile runs through
+    /// `sashiko review` alone.
+    pub fn has_bug_pipeline(self) -> bool {
+        match self {
+            ProjectId::Linux | ProjectId::Sashiko | ProjectId::Gcc | ProjectId::Qemu => true,
+            ProjectId::Userspace => false,
         }
     }
 
@@ -119,6 +135,7 @@ impl ProjectId {
             ProjectId::Sashiko => "projects/sashiko/mailing_lists.toml",
             ProjectId::Gcc => "projects/gcc/mailing_lists.toml",
             ProjectId::Qemu => "projects/qemu/mailing_lists.toml",
+            ProjectId::Userspace => "projects/userspace/mailing_lists.toml",
         }
     }
 
@@ -128,14 +145,15 @@ impl ProjectId {
     pub fn upstream_maintainers_path(self) -> Option<&'static str> {
         match self {
             ProjectId::Linux => Some("projects/linux/upstream_maintainers.toml"),
-            ProjectId::Sashiko | ProjectId::Gcc | ProjectId::Qemu => None,
+            ProjectId::Sashiko | ProjectId::Gcc | ProjectId::Qemu | ProjectId::Userspace => None,
         }
     }
 
     /// Where this project's code comes from: the tree `sashiko repo sync`
-    /// clones and the daemon reviews patches against.
-    pub fn upstream(self) -> Upstream {
-        match self {
+    /// clones and the daemon reviews patches against. The userspace profile
+    /// covers many projects and reviews a local checkout, so it has none.
+    pub fn upstream(self) -> Option<Upstream> {
+        Some(match self {
             ProjectId::Linux => Upstream {
                 url: "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git",
                 // Several GB, served from a CDN: a clone that starts from it
@@ -156,7 +174,8 @@ impl ProjectId {
                 url: "https://gitlab.com/qemu-project/qemu.git",
                 seed: Seed::None,
             },
-        }
+            ProjectId::Userspace => return None,
+        })
     }
 }
 
@@ -201,6 +220,7 @@ impl FromStr for ProjectId {
             "sashiko" => Ok(ProjectId::Sashiko),
             "gcc" => Ok(ProjectId::Gcc),
             "qemu" => Ok(ProjectId::Qemu),
+            "userspace" => Ok(ProjectId::Userspace),
             _ => Err(UnknownProject(s.to_string())),
         }
     }
@@ -239,6 +259,7 @@ impl ProjectId {
         ProjectId::Sashiko,
         ProjectId::Gcc,
         ProjectId::Qemu,
+        ProjectId::Userspace,
     ];
 }
 
@@ -270,10 +291,14 @@ mod tests {
         // checked against a match the compiler forces to stay exhaustive.
         for project in ProjectId::ALL {
             match project {
-                ProjectId::Linux | ProjectId::Sashiko | ProjectId::Gcc | ProjectId::Qemu => {}
+                ProjectId::Linux
+                | ProjectId::Sashiko
+                | ProjectId::Gcc
+                | ProjectId::Qemu
+                | ProjectId::Userspace => {}
             }
         }
-        assert_eq!(ProjectId::ALL.len(), 4);
+        assert_eq!(ProjectId::ALL.len(), 5);
     }
 
     #[test]
@@ -288,6 +313,7 @@ mod tests {
     fn test_display_name() {
         assert_eq!(ProjectId::Linux.display_name(), "Linux");
         assert_eq!(ProjectId::Sashiko.display_name(), "Sashiko");
+        assert_eq!(ProjectId::Userspace.display_name(), "Userspace");
         assert_eq!(ProjectId::Gcc.display_name(), "GCC");
         assert_eq!(ProjectId::Qemu.display_name(), "QEMU");
     }
@@ -299,7 +325,9 @@ mod tests {
         // would be refused there rather than here.
         let allowed = |url: &str| url.starts_with("https://") || url.starts_with("git://");
         for project in ProjectId::ALL {
-            let upstream = project.upstream();
+            let Some(upstream) = project.upstream() else {
+                continue;
+            };
             assert!(allowed(upstream.url), "{project}: {}", upstream.url);
             match upstream.seed {
                 Seed::None => {}
@@ -347,6 +375,14 @@ mod tests {
         assert_eq!(ProjectId::Linux.prompt_dir(), "kernel");
         assert_eq!(ProjectId::Sashiko.prompt_dir(), "sashiko");
         assert_eq!(ProjectId::Qemu.prompt_dir(), "qemu");
+        assert_eq!(ProjectId::Userspace.prompt_dir(), "userspace");
+    }
+
+    #[test]
+    fn test_only_userspace_lacks_a_bug_pipeline() {
+        assert!(ProjectId::Linux.has_bug_pipeline());
+        assert!(ProjectId::Sashiko.has_bug_pipeline());
+        assert!(!ProjectId::Userspace.has_bug_pipeline());
     }
 
     #[test]
