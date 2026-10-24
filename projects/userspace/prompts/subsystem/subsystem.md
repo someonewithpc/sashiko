@@ -18,3 +18,4 @@ Matching any trigger is enough.
 | GObject | `#include <glib-object.h>`, `GObject`, `G_DECLARE_`, `G_DEFINE_TYPE`, `_class_init`, `_init`, `dispose`, `finalize`, `g_object_ref`, `g_object_unref`, `g_object_new`, properties, `GParamSpec`, `g_signal_`, `g_signal_connect`, floating references, `GInitiallyUnowned` | gobject.md |
 | GIO and D-Bus | `#include <gio/gio.h>`, `GTask`, `GCancellable`, `GAsyncResult`, `_async`, `_finish`, `GMainContext`, `GMainLoop`, `g_idle_add`, `g_timeout_add`, `GSource`, `GDBus`, `g_dbus_`, `GDBusMethodInvocation`, `g_bus_own_name`, polkit, `GFile`, `GInputStream`, `GSettings`, `GUdev`, `GUsb` | gio.md |
 | C++ | `.cpp`, `.hpp`, `.cc`, `class`, templates, `std::`, `unique_ptr`, `shared_ptr`, `weak_ptr`, lambdas, iterators, move semantics, exceptions | cpp.md |
+| Hyprland and hyprutils | Hyprland, aquamarine, hyprutils, `Hyprutils::`, `SP<`, `WP<`, `makeShared`, `CSignal`, `listen(`, `HyprlandAPI::` | hyprutils.md |
