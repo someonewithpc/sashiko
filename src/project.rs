@@ -43,6 +43,7 @@ pub enum ProjectId {
     Qemu,
     Zephyr,
     E2fsprogs,
+    Userspace,
 }
 
 impl ProjectId {
@@ -56,6 +57,7 @@ impl ProjectId {
             ProjectId::Qemu => "qemu",
             ProjectId::Zephyr => "zephyr",
             ProjectId::E2fsprogs => "e2fsprogs",
+            ProjectId::Userspace => "userspace",
         }
     }
 
@@ -68,6 +70,7 @@ impl ProjectId {
             ProjectId::Qemu => "QEMU",
             ProjectId::Zephyr => "Zephyr",
             ProjectId::E2fsprogs => "e2fsprogs",
+            ProjectId::Userspace => "Userspace",
         }
     }
 
@@ -75,7 +78,7 @@ impl ProjectId {
     pub fn mainline_branch(self) -> &'static str {
         match self {
             ProjectId::Linux | ProjectId::Gcc | ProjectId::Qemu | ProjectId::E2fsprogs => "master",
-            ProjectId::Sashiko | ProjectId::Zephyr => "main",
+            ProjectId::Sashiko | ProjectId::Zephyr | ProjectId::Userspace => "main",
         }
     }
 
@@ -101,6 +104,7 @@ impl ProjectId {
                     || url.contains("tytso/e2fsprogs")
                     || url.contains("e2fsprogs.git.sourceforge.net")
             }
+            ProjectId::Userspace => false,
         }
     }
 
@@ -121,6 +125,7 @@ impl ProjectId {
             ProjectId::Qemu => "qemu",
             ProjectId::Zephyr => "zephyr",
             ProjectId::E2fsprogs => "e2fsprogs",
+            ProjectId::Userspace => "userspace",
         }
     }
 
@@ -135,7 +140,8 @@ impl ProjectId {
             | ProjectId::Gcc
             | ProjectId::Qemu
             | ProjectId::Zephyr
-            | ProjectId::E2fsprogs => false,
+            | ProjectId::E2fsprogs
+            | ProjectId::Userspace => false,
         }
     }
 
@@ -154,7 +160,25 @@ impl ProjectId {
             | ProjectId::Gcc
             | ProjectId::Qemu
             | ProjectId::Zephyr
-            | ProjectId::E2fsprogs => crate::authority::TrustedBots(&[]),
+            | ProjectId::E2fsprogs
+            | ProjectId::Userspace => crate::authority::TrustedBots(&[]),
+        }
+    }
+
+    /// Whether the bug pipeline and bug database know this project.
+    ///
+    /// The daemon and `sashiko benchmark` run the Reviewer, which queues bugs,
+    /// so they serve only these projects. The userspace profile runs through
+    /// `sashiko review` alone.
+    pub fn has_bug_pipeline(self) -> bool {
+        match self {
+            ProjectId::Linux
+            | ProjectId::Sashiko
+            | ProjectId::Gcc
+            | ProjectId::Qemu
+            | ProjectId::Zephyr
+            | ProjectId::E2fsprogs => true,
+            ProjectId::Userspace => false,
         }
     }
 
@@ -168,6 +192,7 @@ impl ProjectId {
             ProjectId::Qemu => "projects/qemu/mailing_lists.toml",
             ProjectId::Zephyr => "projects/zephyr/mailing_lists.toml",
             ProjectId::E2fsprogs => "projects/e2fsprogs/mailing_lists.toml",
+            ProjectId::Userspace => "projects/userspace/mailing_lists.toml",
         }
     }
 
@@ -181,13 +206,15 @@ impl ProjectId {
             ProjectId::Qemu => "projects/qemu/bugs_access.toml",
             ProjectId::Zephyr => "projects/zephyr/bugs_access.toml",
             ProjectId::E2fsprogs => "projects/e2fsprogs/bugs_access.toml",
+            ProjectId::Userspace => "projects/userspace/bugs_access.toml",
         }
     }
 
     /// Where this project's code comes from: the tree `sashiko repo sync`
-    /// clones and the daemon reviews patches against.
-    pub fn upstream(self) -> Upstream {
-        match self {
+    /// clones and the daemon reviews patches against. The userspace profile
+    /// covers many projects and reviews a local checkout, so it has none.
+    pub fn upstream(self) -> Option<Upstream> {
+        Some(match self {
             ProjectId::Linux => Upstream {
                 url: "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git",
                 // Several GB, served from a CDN: a clone that starts from it
@@ -216,7 +243,8 @@ impl ProjectId {
                 url: "https://git.kernel.org/pub/scm/fs/ext2/e2fsprogs.git",
                 seed: Seed::Mirror("https://github.com/tytso/e2fsprogs.git"),
             },
-        }
+            ProjectId::Userspace => return None,
+        })
     }
 }
 
@@ -263,6 +291,7 @@ impl FromStr for ProjectId {
             "qemu" => Ok(ProjectId::Qemu),
             "zephyr" => Ok(ProjectId::Zephyr),
             "e2fsprogs" => Ok(ProjectId::E2fsprogs),
+            "userspace" => Ok(ProjectId::Userspace),
             _ => Err(UnknownProject(s.to_string())),
         }
     }
@@ -303,6 +332,7 @@ impl ProjectId {
         ProjectId::Qemu,
         ProjectId::Zephyr,
         ProjectId::E2fsprogs,
+        ProjectId::Userspace,
     ];
 }
 
@@ -339,10 +369,11 @@ mod tests {
                 | ProjectId::Gcc
                 | ProjectId::Qemu
                 | ProjectId::Zephyr
-                | ProjectId::E2fsprogs => {}
+                | ProjectId::E2fsprogs
+                | ProjectId::Userspace => {}
             }
         }
-        assert_eq!(ProjectId::ALL.len(), 6);
+        assert_eq!(ProjectId::ALL.len(), 7);
     }
 
     #[test]
@@ -357,6 +388,7 @@ mod tests {
     fn test_display_name() {
         assert_eq!(ProjectId::Linux.display_name(), "Linux");
         assert_eq!(ProjectId::Sashiko.display_name(), "Sashiko");
+        assert_eq!(ProjectId::Userspace.display_name(), "Userspace");
         assert_eq!(ProjectId::Gcc.display_name(), "GCC");
         assert_eq!(ProjectId::Qemu.display_name(), "QEMU");
         assert_eq!(ProjectId::Zephyr.display_name(), "Zephyr");
@@ -370,7 +402,9 @@ mod tests {
         // would be refused there rather than here.
         let allowed = |url: &str| url.starts_with("https://") || url.starts_with("git://");
         for project in ProjectId::ALL {
-            let upstream = project.upstream();
+            let Some(upstream) = project.upstream() else {
+                continue;
+            };
             assert!(allowed(upstream.url), "{project}: {}", upstream.url);
             match upstream.seed {
                 Seed::None => {}
@@ -420,6 +454,14 @@ mod tests {
         assert_eq!(ProjectId::Sashiko.prompt_dir(), "sashiko");
         assert_eq!(ProjectId::Qemu.prompt_dir(), "qemu");
         assert_eq!(ProjectId::Zephyr.prompt_dir(), "zephyr");
+        assert_eq!(ProjectId::Userspace.prompt_dir(), "userspace");
+    }
+
+    #[test]
+    fn test_only_userspace_lacks_a_bug_pipeline() {
+        assert!(ProjectId::Linux.has_bug_pipeline());
+        assert!(ProjectId::Sashiko.has_bug_pipeline());
+        assert!(!ProjectId::Userspace.has_bug_pipeline());
     }
 
     #[test]

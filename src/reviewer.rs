@@ -3529,6 +3529,9 @@ impl Reviewer {
                                             crate::project::ProjectId::E2fsprogs => {
                                                 "sashiko:e2fsprogs_patch_review"
                                             }
+                                            crate::project::ProjectId::Userspace => {
+                                                crate::workflows::linux_bug::no_bug_pipeline()
+                                            }
                                         };
                                         let discovery_db = ctx.db.with_bug_actor(
                                             ctx.settings.project.attribution(),

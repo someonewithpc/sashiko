@@ -132,7 +132,9 @@ pub async fn check_daemon_tree(path: &Path, project: ProjectId) -> Result<(), St
             path.display().to_string()
         ));
     }
-    let expected = project.upstream().url;
+    let Some(expected) = project.upstream().map(|u| u.url) else {
+        return Ok(());
+    };
     match origin_url(path).await {
         Some(url) if url != expected => warn!(
             "The {project} tree at {} fetches origin from {}, not from {}",

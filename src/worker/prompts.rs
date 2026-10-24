@@ -73,6 +73,9 @@ use crate::workflows::qemu_patch_review::{
 use crate::workflows::sashiko_patch_review::{
     build_sashiko_patch_review_workflow_with_effort, sashiko_system_prompt,
 };
+use crate::workflows::userspace_patch_review::{
+    build_userspace_patch_review_workflow_with_effort, userspace_system_prompt,
+};
 use crate::workflows::zephyr_patch_review::{
     build_zephyr_patch_review_workflow_with_effort, zephyr_system_prompt,
 };
@@ -439,7 +442,7 @@ impl Worker {
                 &patchset,
                 &target_commit_sha,
             ),
-            ProjectId::Sashiko => build_sashiko_series_context(
+            ProjectId::Sashiko | ProjectId::Userspace => build_sashiko_series_context(
                 self.series_range.as_deref(),
                 &patchset,
                 &target_commit_sha,
@@ -547,6 +550,7 @@ impl Worker {
                 ProjectId::Qemu => qemu_system_prompt(true),
                 ProjectId::Zephyr => zephyr_system_prompt(true),
                 ProjectId::E2fsprogs => e2fsprogs_system_prompt(true),
+                ProjectId::Userspace => userspace_system_prompt(true),
             };
             let rendered_sys = sys_template.render_for_log(&state);
             self.global_history.push(AiMessage {
@@ -586,6 +590,11 @@ impl Worker {
                 self.effort,
             ),
             ProjectId::E2fsprogs => build_e2fsprogs_patch_review_workflow_with_effort(
+                self.max_interactions,
+                self.temperature,
+                self.effort,
+            ),
+            ProjectId::Userspace => build_userspace_patch_review_workflow_with_effort(
                 self.max_interactions,
                 self.temperature,
                 self.effort,
@@ -1005,17 +1014,21 @@ mod tests {
                     load_maintainer_notes(&prompts),
                     &diff,
                     render_maintainer_notes,
-                ).contains(marker),
+                )
+                .contains(marker),
                 "{expression}"
             );
         }
         let unrelated = "diff --git a/samples/demo/src/main.c b/samples/demo/src/main.c\n@@ -0,0 +1 @@\n+int answer = 42;\n";
-        assert!(!select_notes(
-            "maintainer notes",
-            load_maintainer_notes(&prompts),
-            unrelated,
-            render_maintainer_notes,
-        ).contains(marker));
+        assert!(
+            !select_notes(
+                "maintainer notes",
+                load_maintainer_notes(&prompts),
+                unrelated,
+                render_maintainer_notes,
+            )
+            .contains(marker)
+        );
     }
 
     #[test]
