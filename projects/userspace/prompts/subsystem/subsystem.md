@@ -15,3 +15,4 @@ Matching any trigger is enough.
 | Library | Triggers | File |
 |---------|----------|------|
 | GLib | `#include <glib.h>`, `g_` functions, `gchar`, `gint`, `gsize`, `gboolean`, `GError`, `g_autoptr`, `g_autofree`, `g_auto`, `g_steal_pointer`, `g_clear_`, `GHashTable`, `GPtrArray`, `GArray`, `GString`, `GBytes`, `GVariant`, `g_return_if_fail`, `g_assert` | glib.md |
+| GObject | `#include <glib-object.h>`, `GObject`, `G_DECLARE_`, `G_DEFINE_TYPE`, `_class_init`, `_init` next to `G_DEFINE_TYPE`, `dispose` or `finalize` as `GObjectClass` vfuncs, `g_object_ref`, `g_object_unref`, `g_object_new`, `g_param_spec_`, `GParamSpec`, `g_object_notify`, `g_signal_`, `g_signal_connect`, floating references, `GInitiallyUnowned` | gobject.md |
