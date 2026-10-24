@@ -908,7 +908,7 @@ pub fn format_post_verification_feedback(violation: &str) -> String {
     )
 }
 
-fn validate_inline_format(content: &str, _state: &LinuxPatchReviewState) -> Result<(), String> {
+pub fn validate_inline_format(content: &str, _state: &LinuxPatchReviewState) -> Result<(), String> {
     if content.lines().any(|l| l.trim_start().starts_with("```")) {
         return Err("The output contains Markdown code blocks ('```'). It must be plain text as per `inline-template.md`.".to_string());
     }
