@@ -681,7 +681,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .ok()
                     .map(|settings| settings.git.repository_path.as_str());
                 let path = sashiko::repo_sync::resolve_path(path.as_deref(), configured, project);
-                let outcome = sashiko::repo_sync::sync(&path, project.upstream()).await?;
+                let Some(upstream) = project.upstream() else {
+                    return Err(format!(
+                        "{project} has no upstream tree to sync; `sashiko review` runs in a local checkout"
+                    )
+                    .into());
+                };
+                let outcome = sashiko::repo_sync::sync(&path, upstream).await?;
                 println!("{project} tree at {}: {outcome}", path.display());
                 return Ok(());
             }
@@ -768,6 +774,13 @@ async fn run_daemon(
     overridden: Vec<String>,
     project: ProjectId,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if !project.has_bug_pipeline() {
+        return Err(format!(
+            "the {project} project has no daemon mode; review its commits with sashiko review"
+        )
+        .into());
+    }
+
     // Now handle settings result properly
     let mut settings = match settings_result {
         Ok(s) => {

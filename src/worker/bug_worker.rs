@@ -128,6 +128,7 @@ impl BugWorker {
             crate::project::ProjectId::Sashiko => "sashiko:sashiko_bug",
             crate::project::ProjectId::Gcc => "sashiko:gcc_bug",
             crate::project::ProjectId::Qemu => "sashiko:qemu_bug",
+            crate::project::ProjectId::Userspace => crate::workflows::linux_bug::no_bug_pipeline(),
         };
         self.db = Arc::new(self.db.with_bug_actor("system", bug_tool, None));
         self
@@ -260,6 +261,9 @@ impl BugWorker {
                             crate::project::ProjectId::Sashiko => untouched_sashiko.push(bug),
                             crate::project::ProjectId::Gcc => untouched_gcc.push(bug),
                             crate::project::ProjectId::Qemu => untouched_qemu.push(bug),
+                            crate::project::ProjectId::Userspace => {
+                                crate::workflows::linux_bug::no_bug_pipeline()
+                            }
                         }
                     }
                     FixCheckClassification::NeedsLlm(candidates) => {
@@ -665,6 +669,9 @@ impl BugWorker {
                             crate::project::ProjectId::Sashiko => "sashiko:sashiko_bug",
                             crate::project::ProjectId::Gcc => "sashiko:gcc_bug",
                             crate::project::ProjectId::Qemu => "sashiko:qemu_bug",
+                            crate::project::ProjectId::Userspace => {
+                                crate::workflows::linux_bug::no_bug_pipeline()
+                            }
                         };
                         let actor = if !bug.reporter.is_empty() {
                             bug.reporter.as_str()
