@@ -20,12 +20,14 @@ pub mod linux_bug;
 pub mod linux_patch_review;
 pub mod review_map;
 pub mod sashiko_patch_review;
+pub mod userspace_patch_review;
 
 /// Returns the short UI label for a review stage belonging to `project`.
 pub fn stage_short_label(project: ProjectId, stage: &str) -> Option<&'static str> {
     match project {
         ProjectId::Linux => linux_patch_review::stage_short_label(stage),
         ProjectId::Sashiko => sashiko_patch_review::stage_short_label(stage),
+        ProjectId::Userspace => userspace_patch_review::stage_short_label(stage),
     }
 }
 
@@ -40,6 +42,10 @@ pub fn default_stage_count(project: ProjectId) -> usize {
         ProjectId::Sashiko => {
             sashiko_patch_review::ANALYSIS_STAGES.len()
                 + sashiko_patch_review::CONSOLIDATION_STAGES.len()
+        }
+        ProjectId::Userspace => {
+            userspace_patch_review::ANALYSIS_STAGES.len()
+                + userspace_patch_review::CONSOLIDATION_STAGES.len()
         }
     }
 }
@@ -83,6 +89,21 @@ pub fn planned_stages_from(project: ProjectId, stage_names: &[&'static str]) -> 
             if !planned.is_empty() {
                 planned.extend(
                     sashiko_patch_review::CONSOLIDATION_STAGES
+                        .iter()
+                        .map(|s| s.name.to_string()),
+                );
+            }
+            planned
+        }
+        ProjectId::Userspace => {
+            let mut planned: Vec<String> = stage_names
+                .iter()
+                .filter(|n| userspace_patch_review::analysis_stage_by_name(n).is_some())
+                .map(|n| n.to_string())
+                .collect();
+            if !planned.is_empty() {
+                planned.extend(
+                    userspace_patch_review::CONSOLIDATION_STAGES
                         .iter()
                         .map(|s| s.name.to_string()),
                 );

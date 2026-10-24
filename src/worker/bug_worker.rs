@@ -126,6 +126,7 @@ impl BugWorker {
         let bug_tool = match project {
             crate::project::ProjectId::Linux => "sashiko:linux_bug",
             crate::project::ProjectId::Sashiko => "sashiko:sashiko_bug",
+            crate::project::ProjectId::Userspace => "sashiko:userspace_bug",
         };
         self.db = Arc::new(self.db.with_bug_actor("system", bug_tool, None));
         self
@@ -233,6 +234,7 @@ impl BugWorker {
 
             let mut untouched_linux = Vec::new();
             let mut untouched_sashiko = Vec::new();
+            let mut untouched_userspace = Vec::new();
             let mut skipped_ids = Vec::new();
 
             for bug in chunk {
@@ -254,6 +256,7 @@ impl BugWorker {
                         match proj {
                             crate::project::ProjectId::Linux => untouched_linux.push(bug),
                             crate::project::ProjectId::Sashiko => untouched_sashiko.push(bug),
+                            crate::project::ProjectId::Userspace => untouched_userspace.push(bug),
                         }
                     }
                     FixCheckClassification::NeedsLlm(candidates) => {
@@ -267,6 +270,7 @@ impl BugWorker {
                     linus_sha,
                     &untouched_linux,
                     &untouched_sashiko,
+                    &untouched_userspace,
                     &skipped_ids,
                 )
                 .await;
@@ -402,6 +406,7 @@ impl BugWorker {
         linus_sha: &str,
         untouched_linux: &[crate::db::Bug],
         untouched_sashiko: &[crate::db::Bug],
+        untouched_userspace: &[crate::db::Bug],
         skipped_ids: &[i64],
     ) -> usize {
         let mut advanced = 0usize;
@@ -427,6 +432,18 @@ impl BugWorker {
             {
                 Ok(n) => advanced += n,
                 Err(e) => warn!("Failed to batch-advance untouched Sashiko bugs: {}", e),
+            }
+        }
+        if !untouched_userspace.is_empty() {
+            let db = self
+                .db
+                .with_bug_actor("sashiko", "sashiko:userspace_bug:fix_check", None);
+            match db
+                .advance_open_bugs_without_llm_batch(untouched_userspace, linus_sha)
+                .await
+            {
+                Ok(n) => advanced += n,
+                Err(e) => warn!("Failed to batch-advance untouched userspace bugs: {}", e),
             }
         }
         if !skipped_ids.is_empty()
@@ -621,6 +638,7 @@ impl BugWorker {
                         let bug_tool = match effective_project {
                             crate::project::ProjectId::Linux => "sashiko:linux_bug",
                             crate::project::ProjectId::Sashiko => "sashiko:sashiko_bug",
+                            crate::project::ProjectId::Userspace => "sashiko:userspace_bug",
                         };
                         let actor = if !bug.reporter.is_empty() {
                             bug.reporter.as_str()
