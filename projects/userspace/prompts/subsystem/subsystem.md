@@ -16,3 +16,4 @@ Matching any trigger is enough.
 |---------|----------|------|
 | GLib | `#include <glib.h>`, `g_` functions, `gchar`, `gint`, `gsize`, `gboolean`, `GError`, `g_autoptr`, `g_autofree`, `g_auto`, `g_steal_pointer`, `g_clear_`, `GHashTable`, `GPtrArray`, `GArray`, `GString`, `GBytes`, `GVariant`, `g_return_if_fail`, `g_assert` | glib.md |
 | GObject | `#include <glib-object.h>`, `GObject`, `G_DECLARE_`, `G_DEFINE_TYPE`, `_class_init`, `_init`, `dispose`, `finalize`, `g_object_ref`, `g_object_unref`, `g_object_new`, properties, `GParamSpec`, `g_signal_`, `g_signal_connect`, floating references, `GInitiallyUnowned` | gobject.md |
+| GIO and D-Bus | `#include <gio/gio.h>`, `GTask`, `GCancellable`, `GAsyncResult`, `_async`, `_finish`, `GMainContext`, `GMainLoop`, `g_idle_add`, `g_timeout_add`, `GSource`, `GDBus`, `g_dbus_`, `GDBusMethodInvocation`, `g_bus_own_name`, polkit, `GFile`, `GInputStream`, `GSettings`, `GUdev`, `GUsb` | gio.md |
