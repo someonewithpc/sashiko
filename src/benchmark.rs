@@ -502,6 +502,13 @@ pub async fn run_benchmark(
     options: BenchmarkOptions,
     mut settings: Settings,
 ) -> Result<BenchmarkRunReport> {
+    if !options.project.has_bug_pipeline() {
+        bail!(
+            "the {} project has no benchmark mode; review its commits with sashiko review",
+            options.project
+        );
+    }
+
     let started_wall = Instant::now();
     let now_utc = chrono::Utc::now();
     let started_at = now_utc.to_rfc3339();
@@ -2533,6 +2540,27 @@ fn write_benchmark_artifacts(report: &BenchmarkRunReport, paths: &BenchmarkRunPa
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_run_benchmark_refuses_projects_without_a_bug_pipeline() {
+        let dir = tempdir().unwrap();
+        let options = BenchmarkOptions {
+            file: dir.path().join("missing.json"),
+            repo: None,
+            db: None,
+            output_dir: None,
+            analyze_only: false,
+            concurrency: None,
+            report_preexisting: true,
+            project: ProjectId::Userspace,
+            prompts: PathBuf::from("projects/userspace/prompts"),
+            settings_path: None,
+        };
+        let err = run_benchmark(options, Settings::new().unwrap())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("has no benchmark mode"), "{err}");
+    }
 
     #[test]
     fn test_deduplicate_benchmark_commits_preserves_order() {

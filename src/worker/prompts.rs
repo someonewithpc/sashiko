@@ -59,6 +59,9 @@ use crate::workflows::linux_patch_review::{
 use crate::workflows::sashiko_patch_review::{
     build_sashiko_patch_review_workflow_with_effort, sashiko_system_prompt,
 };
+use crate::workflows::userspace_patch_review::{
+    build_userspace_patch_review_workflow_with_effort, userspace_system_prompt,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -337,7 +340,7 @@ impl Worker {
                 &patchset,
                 &target_commit_sha,
             ),
-            ProjectId::Sashiko => build_sashiko_series_context(
+            ProjectId::Sashiko | ProjectId::Userspace => build_sashiko_series_context(
                 self.series_range.as_deref(),
                 &patchset,
                 &target_commit_sha,
@@ -384,6 +387,7 @@ impl Worker {
             let sys_template = match self.project {
                 ProjectId::Linux => linux_system_prompt(true),
                 ProjectId::Sashiko => sashiko_system_prompt(true),
+                ProjectId::Userspace => userspace_system_prompt(true),
             };
             let rendered_sys = sys_template.render_for_log(&state);
             self.global_history.push(AiMessage {
@@ -403,6 +407,11 @@ impl Worker {
                 self.effort,
             ),
             ProjectId::Sashiko => build_sashiko_patch_review_workflow_with_effort(
+                self.max_interactions,
+                self.temperature,
+                self.effort,
+            ),
+            ProjectId::Userspace => build_userspace_patch_review_workflow_with_effort(
                 self.max_interactions,
                 self.temperature,
                 self.effort,

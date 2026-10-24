@@ -63,11 +63,21 @@ pub fn sashiko_severity_guide() -> &'static str {
         .expect("sashiko/severity.md must exist in prompt bundle")
 }
 
+/// Returns the compiled-in content of `userspace/severity.md`.
+pub fn userspace_severity_guide() -> &'static str {
+    PROMPT_BUNDLE_FILES
+        .iter()
+        .find(|(path, _)| *path == "userspace/severity.md")
+        .and_then(|(_, bytes)| std::str::from_utf8(bytes).ok())
+        .expect("userspace/severity.md must exist in prompt bundle")
+}
+
 /// Returns the compiled-in severity guide for `project`.
 pub fn severity_guide(project: ProjectId) -> &'static str {
     match project {
         ProjectId::Linux => kernel_severity_guide(),
         ProjectId::Sashiko => sashiko_severity_guide(),
+        ProjectId::Userspace => userspace_severity_guide(),
     }
 }
 
@@ -151,6 +161,13 @@ mod tests {
         assert!(guide.contains("Sashiko is not an operating system kernel"));
         assert_eq!(severity_guide(ProjectId::Linux), kernel_severity_guide());
         assert_eq!(severity_guide(ProjectId::Sashiko), sashiko_severity_guide());
+    }
+
+    #[test]
+    fn test_userspace_severity_guide_not_empty() {
+        let guide = userspace_severity_guide();
+        assert!(guide.contains("# Severity Levels"));
+        assert_eq!(severity_guide(ProjectId::Userspace), guide);
     }
 
     #[test]

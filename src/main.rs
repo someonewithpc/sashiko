@@ -665,6 +665,13 @@ async fn run_daemon(
     overridden: Vec<String>,
     project: ProjectId,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if !project.has_bug_pipeline() {
+        return Err(format!(
+            "the {project} project has no daemon mode; review its commits with sashiko review"
+        )
+        .into());
+    }
+
     // Now handle settings result properly
     let mut settings = match settings_result {
         Ok(s) => {

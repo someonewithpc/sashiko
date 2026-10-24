@@ -1,0 +1,11 @@
+# Per-mailing-list configuration for Sashiko (--project userspace).
+# Userspace projects are reviewed locally with sashiko review; no lists are tracked.
+
+[defaults]
+track = false
+embargo_hours = 0
+reply_to = []
+positive_review = "none"
+mute_all = true
+cc = []
+ignored_emails = []
