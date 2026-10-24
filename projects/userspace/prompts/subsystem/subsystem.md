@@ -14,3 +14,4 @@ Matching any trigger is enough.
 
 | Library | Triggers | File |
 |---------|----------|------|
+| GLib | `#include <glib.h>`, `g_` functions, `gchar`, `gint`, `gsize`, `gboolean`, `GError`, `g_autoptr`, `g_autofree`, `g_auto`, `g_steal_pointer`, `g_clear_`, `GHashTable`, `GPtrArray`, `GArray`, `GString`, `GBytes`, `GVariant`, `g_return_if_fail`, `g_assert` | glib.md |
