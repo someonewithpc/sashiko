@@ -20,3 +20,4 @@ Matching any trigger is enough.
 | C++ | `.cpp`, `.cxx`, `.cc`, `.hpp`, `.hxx`, `.hh`, `std::`, `unique_ptr`, `shared_ptr`, `weak_ptr`, `std::move`, `template <`, `class ... {` with access specifiers, `namespace`, `throw`, `try {` | cpp.md |
 | Hyprland and hyprutils | Hyprland, aquamarine, hyprutils, `Hyprutils::`, `SP<`, `WP<`, `makeShared`, `CSignal`, `CHyprSignalListener`, `listenStatic`, `.listen(`, `HyprlandAPI::` | hyprutils.md |
 | libwayland and wlroots | `wayland-server`, `wl_listener`, `wl_signal`, `wl_list`, `wl_resource`, `wl_client`, `wl_event_loop`, `wl_event_source`, `wlr_` | wayland.md |
+| libdrm (DRM/KMS from userspace) | `xf86drm`, `xf86drmMode`, `drmMode`, `drmIoctl`, `drmModeAtomic`, `DRM_MODE_ATOMIC_`, `DRM_MODE_PAGE_FLIP_EVENT`, `drmHandleEvent`, `drmModeConnector`, `drmModePlane`, `drmModeCrtc`, `drmModeGetConnector` | libdrm.md |
