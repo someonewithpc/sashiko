@@ -33,6 +33,11 @@
 //! or whose `symbols` match an identifier its diff touches. A path is a
 //! directory prefix ending in `/`, an exact file, a glob, or `*` for every
 //! patch; a symbol is an identifier, or a prefix ending in `*`.
+//!
+//! Library notes use the same format under `libraries/`. They hold the
+//! contracts and known pitfalls of a library the reviewed code calls into,
+//! which is how code works rather than what a maintainer prefers, so they
+//! render in a block of their own.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -44,6 +49,9 @@ use crate::maintainers::CompiledPattern;
 
 /// Directory of maintainer notes inside a project's prompt directory.
 pub const MAINTAINER_NOTES_RELDIR: &str = "maintainers";
+
+/// Directory of library notes inside a project's prompt directory.
+pub const LIBRARY_NOTES_RELDIR: &str = "libraries";
 
 const DELIMITER: &str = "+++";
 
@@ -57,7 +65,7 @@ struct FrontMatter {
     symbols: Vec<String>,
 }
 
-/// One maintainer note.
+/// One maintainer or library note.
 #[derive(Debug, Clone)]
 pub struct MaintainerNote {
     /// File name without `.md`.
@@ -118,12 +126,21 @@ impl MaintainerNote {
     }
 }
 
-/// Every maintainer note in `prompts_dir`, sorted by name. Notes that fail
-/// to parse are skipped with a warning, so one bad note does not cost a
-/// review the others.
+/// Every maintainer note in `prompts_dir`, sorted by name.
 pub fn load_maintainer_notes(prompts_dir: &Path) -> Vec<MaintainerNote> {
-    let dir = prompts_dir.join(MAINTAINER_NOTES_RELDIR);
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    load_notes(&prompts_dir.join(MAINTAINER_NOTES_RELDIR))
+}
+
+/// Every library note in `prompts_dir`, sorted by name.
+pub fn load_library_notes(prompts_dir: &Path) -> Vec<MaintainerNote> {
+    load_notes(&prompts_dir.join(LIBRARY_NOTES_RELDIR))
+}
+
+/// Every note in `dir`, sorted by name. Notes that fail to parse are
+/// skipped with a warning, so one bad note does not cost a review the
+/// others.
+fn load_notes(dir: &Path) -> Vec<MaintainerNote> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut notes = Vec::new();
@@ -141,7 +158,7 @@ pub fn load_maintainer_notes(prompts_dir: &Path) -> Vec<MaintainerNote> {
             .and_then(|text| MaintainerNote::parse(name, &text));
         match parsed {
             Ok(note) => notes.push(note),
-            Err(err) => tracing::warn!("skipping maintainer note {}: {err:#}", path.display()),
+            Err(err) => tracing::warn!("skipping note {}: {err:#}", path.display()),
         }
     }
     notes.sort_by(|a, b| a.name.cmp(&b.name));
@@ -179,22 +196,41 @@ pub fn diff_identifiers_all(diff: &str) -> HashSet<String> {
     out
 }
 
-/// Renders the review prompt block for `notes`.
+/// Renders the review prompt block for maintainer `notes`.
 pub fn render_maintainer_notes(notes: &[&MaintainerNote]) -> String {
+    render_notes(
+        notes,
+        ("maintainer_notes", "maintainer_note", "subsystem"),
+        "These notes record what the maintainers of the subsystems this patch touches expect beyond correctness: their preferences, policies, conventions and review priorities. Apply them when judging the patch; they do not describe how the code works.",
+    )
+}
+
+/// Renders the review prompt block for library `notes`.
+pub fn render_library_notes(notes: &[&MaintainerNote]) -> String {
+    render_notes(
+        notes,
+        ("library_notes", "library_note", "library"),
+        "These notes describe the contracts and known pitfalls of the libraries and interfaces this patch uses. Check the patch against them, but read the source at Target Commit SHA for what the code actually does.",
+    )
+}
+
+fn render_notes(
+    notes: &[&MaintainerNote],
+    (block_tag, note_tag, attribute): (&str, &str, &str),
+    preamble: &str,
+) -> String {
     if notes.is_empty() {
         return String::new();
     }
-    let mut block = String::from(
-        "\n\n<maintainer_notes>\nThese notes record what the maintainers of the subsystems this patch touches expect beyond correctness: their preferences, policies, conventions and review priorities. Apply them when judging the patch; they do not describe how the code works.\n",
-    );
+    let mut block = format!("\n\n<{block_tag}>\n{preamble}\n");
     for note in notes {
         block.push_str(&format!(
-            "\n<maintainer_note subsystem=\"{}\">\n{}\n</maintainer_note>\n",
+            "\n<{note_tag} {attribute}=\"{}\">\n{}\n</{note_tag}>\n",
             note.title.replace('"', "'"),
             note.body
         ));
     }
-    block.push_str("</maintainer_notes>");
+    block.push_str(&format!("</{block_tag}>"));
     block
 }
 
@@ -263,19 +299,50 @@ mod tests {
         assert_eq!(render_maintainer_notes(&[]), "");
     }
 
-    /// Reads every maintainer note shipped under `projects/*/prompts/`.
+    #[test]
+    fn test_library_and_maintainer_notes_load_from_their_own_dirs() {
+        let prompts = tempfile::tempdir().unwrap();
+        for (reldir, name) in [
+            (MAINTAINER_NOTES_RELDIR, "net-policy"),
+            (LIBRARY_NOTES_RELDIR, "glib"),
+        ] {
+            let dir = prompts.path().join(reldir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(format!("{name}.md")), NOTE).unwrap();
+        }
+        let names = |notes: Vec<MaintainerNote>| -> Vec<String> {
+            notes.into_iter().map(|n| n.name).collect()
+        };
+        assert_eq!(names(load_maintainer_notes(prompts.path())), ["net-policy"]);
+        assert_eq!(names(load_library_notes(prompts.path())), ["glib"]);
+    }
+
+    #[test]
+    fn test_render_library_block() {
+        let note = MaintainerNote::parse("n", NOTE).unwrap();
+        let block = render_library_notes(&[&note]);
+        assert!(block.starts_with("\n\n<library_notes>\n"));
+        assert!(block.contains("<library_note library=\"Networking Drivers\">"));
+        assert!(block.ends_with("</library_notes>"));
+        assert!(!block.contains("<maintainer_note"));
+        assert_eq!(render_library_notes(&[]), "");
+    }
+
+    /// Reads every maintainer and library note shipped under `projects/*/prompts/`.
     fn shipped_maintainer_notes() -> Vec<(std::path::PathBuf, String)> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("projects");
         let mut notes = Vec::new();
         for project in std::fs::read_dir(&root).unwrap().flatten() {
-            let dir = project.path().join("prompts").join(MAINTAINER_NOTES_RELDIR);
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let text = std::fs::read_to_string(&path).unwrap();
-                notes.push((path, text));
+            for reldir in [MAINTAINER_NOTES_RELDIR, LIBRARY_NOTES_RELDIR] {
+                let dir = project.path().join("prompts").join(reldir);
+                let Ok(entries) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    notes.push((path, text));
+                }
             }
         }
         notes

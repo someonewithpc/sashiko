@@ -57,6 +57,9 @@ pub struct LinuxPatchReviewState {
     pub code_notes: String,
     /// Rendered `<maintainer_notes>` block for the system prompt, or empty.
     pub maintainer_notes: String,
+    /// Rendered `<library_notes>` block, or empty. Only workflows whose
+    /// project ships library notes put it in their system prompt.
+    pub library_notes: String,
     /// Stages selected by dynamic planning (or overridden by manual_stages).
     pub planned_stages: Vec<String>,
     /// Optional reasoning effort mode (`Mid`, `High`, or `Dynamic`).
