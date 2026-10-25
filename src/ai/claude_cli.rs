@@ -17,8 +17,10 @@
 //!
 //! ## Safety
 //!
-//! The prompt carries untrusted patch text; `--print` alone keeps native tools.
-//! `build_claude_args` disables tools and user/project MCP, skills, hooks,
+//! The prompt carries untrusted patch text. This build keeps Claude Code's
+//! built-in tools (Bash, Read, Grep and the rest), which run under the
+//! operator's own permission settings, so only use it on patches the operator
+//! trusts. `build_claude_args` still disables user/project MCP, skills, hooks,
 //! instructions and automatic memory. Requests run in fresh temporary directories.
 //! CLI authentication and inherited environment remain available for routing.
 //! Managed policy remains authoritative, including mandatory hooks and
@@ -26,9 +28,8 @@
 //! These restrictions disable agent functionality, not operating-system
 //! access: the CLI is still trusted to read credentials and contact the model.
 //!
-//! A request with tools also gets `--json-schema`. Claude Code serves it with
-//! a single StructuredOutput tool that takes the reply object and nothing
-//! else, so it gives the model no access to files, commands or the network.
+//! A request with tools also gets `--json-schema`, which Claude Code serves
+//! with a StructuredOutput tool that takes the reply object.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -154,14 +155,13 @@ pub struct ClaudeCliProvider {
     pub effort: Option<String>,
 }
 
-/// Constrains a reply to the tool-calling format `build_prompt` asks for. With
-/// `--tools ""` the API has no tool for the model's native tool-call syntax to
-/// end on, so the model can write it as text and keep inventing calls and
-/// results until the CLI times out.
+/// Constrains a reply to the tool-calling format `build_prompt` asks for.
+/// Without it the model can write its native tool-call syntax as text and keep
+/// inventing calls and results until the CLI times out.
 const TOOL_REPLY_SCHEMA: &str = r#"{"type":"object","minProperties":1,"properties":{"tool_calls":{"type":"array","minItems":1,"items":{"type":"object","properties":{"id":{"type":"string"},"function_name":{"type":"string"},"arguments":{"type":"object"}},"required":["id","function_name","arguments"]}},"content":{"type":"string"}}}"#;
 
 /// Returns the argv passed to `claude` (the prompt goes on stdin). Extracted
-/// so tests can assert that no tool survives.
+/// so tests can check which tools and settings survive.
 pub fn build_claude_args(model: &str, effort: Option<&str>, has_tools: bool) -> Vec<String> {
     // Isolation arguments/settings verified with Claude Code 2.1.170, and
     // --json-schema with 2.1.308
@@ -170,8 +170,6 @@ pub fn build_claude_args(model: &str, effort: Option<&str>, has_tools: bool) -> 
         "--output-format".to_string(),
         "json".to_string(),
         "--no-session-persistence".to_string(),
-        "--tools".to_string(),
-        String::new(),
         "--disallowedTools".to_string(),
         "mcp__*".to_string(),
         "--strict-mcp-config".to_string(),
@@ -273,13 +271,13 @@ impl AiProvider for ClaudeCliProvider {
     }
 
     fn cache_identity(&self) -> String {
-        // Responses produced with ambient tools/settings must not be replayed
-        // for requests using the restricted completion profile.
+        // Responses produced with other tools or settings must not be
+        // replayed for requests using this completion profile.
         cache_identity_with(
             &self.model,
             &[
                 ("effort", self.effort.as_deref()),
-                ("completion_profile", Some("restricted-v2")),
+                ("completion_profile", Some("builtin-tools-v1")),
             ],
         )
     }
@@ -710,10 +708,9 @@ mod tests {
     }
 
     #[test]
-    fn test_claude_args_disable_every_tool() {
+    fn test_claude_args_keep_only_builtin_tools() {
         let args = build_claude_args("sonnet", Some("high"), true);
-        let tools = args.iter().position(|a| a == "--tools").unwrap();
-        assert_eq!(args[tools + 1], "");
+        assert!(!args.contains(&"--tools".to_string()));
         let denied = args.iter().position(|a| a == "--disallowedTools").unwrap();
         assert_eq!(args[denied + 1], "mcp__*");
         assert!(args.contains(&"--strict-mcp-config".to_string()));

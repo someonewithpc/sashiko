@@ -90,7 +90,7 @@ async fn cli_disables_native_tools_and_configuration_in_an_empty_directory() {
             .unwrap_or_else(|| panic!("missing CLI flag {flag}"));
         args[index + 1]
     };
-    assert_eq!(value("--tools"), "");
+    assert!(!args.contains(&"--tools"));
     assert_eq!(value("--disallowedTools"), "mcp__*");
     assert_eq!(value("--setting-sources"), "");
     assert!(args.contains(&"--strict-mcp-config"));

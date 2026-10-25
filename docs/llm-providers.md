@@ -93,8 +93,10 @@ Context window sizes:
 
 - No API key needed -- uses Claude Code's subscription auth.
 - Stateless: spawns `claude --print --output-format json` per request.
-  Built-in tools and user/project customizations (MCP servers, skills, hooks,
-  instruction files and automatic memory) are disabled explicitly. Each call
+  This fork keeps Claude Code's built-in tools, which run under your own
+  permission settings, so only review patches you trust with it. User/project
+  customizations (MCP servers, skills, hooks, instruction files and automatic
+  memory) are disabled explicitly. Each call
   runs in a fresh temporary working directory with no session reuse.
   This invocation was validated with Claude Code 2.1.170.
 - Requests that offer Sashiko tools also pass `--json-schema`, so the model
