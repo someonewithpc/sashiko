@@ -61,6 +61,9 @@ pub struct LinuxPatchReviewState {
     pub maintainer_notes: String,
     /// Upstream Linux kernel threat model loaded from the mainline ref, when available.
     pub kernel_threat_model: Option<crate::threat_model::KernelThreatModel>,
+    /// Rendered `<library_notes>` block, or empty. Only workflows whose
+    /// project ships library notes put it in their system prompt.
+    pub library_notes: String,
     /// Stages selected by dynamic planning (or overridden by manual_stages).
     pub planned_stages: Vec<String>,
     /// Optional reasoning effort mode (`Mid`, `High`, or `Dynamic`).
