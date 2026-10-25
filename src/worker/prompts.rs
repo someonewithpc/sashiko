@@ -13,6 +13,10 @@
 // limitations under the License.
 
 use crate::ai::{AiErrorClass, AiMessage, AiProvider, ClassifyAiError};
+use crate::notes::maintainer_notes::{
+    MaintainerNote, diff_identifiers_all, load_library_notes, load_maintainer_notes,
+    render_library_notes, render_maintainer_notes,
+};
 use crate::settings::CodeNotesScope;
 use crate::toolbox::ToolBox;
 use anyhow::Result;
@@ -148,13 +152,14 @@ async fn select_code_notes(
     crate::notes::select::render_block(set, &notes)
 }
 
-/// Selects the maintainer notes that apply to a patch, by the files and
+/// Selects the `kind` notes that apply to a patch, by the files and
 /// identifiers its diff touches, and renders their prompt block.
-fn select_maintainer_notes(prompts_dir: &std::path::Path, diff: &str) -> String {
-    use crate::notes::maintainer_notes::{
-        diff_identifiers_all, load_maintainer_notes, render_maintainer_notes,
-    };
-    let notes = load_maintainer_notes(prompts_dir);
+fn select_notes(
+    kind: &str,
+    notes: Vec<MaintainerNote>,
+    diff: &str,
+    render: fn(&[&MaintainerNote]) -> String,
+) -> String {
     if notes.is_empty() {
         return String::new();
     }
@@ -165,12 +170,12 @@ fn select_maintainer_notes(prompts_dir: &std::path::Path, diff: &str) -> String 
         .filter(|note| note.applies(&files, &identifiers))
         .collect();
     tracing::info!(
-        "maintainer notes: {} of {} apply: {:?}",
+        "{kind}: {} of {} apply: {:?}",
         selected.len(),
         notes.len(),
         selected.iter().map(|n| n.name.as_str()).collect::<Vec<_>>()
     );
-    render_maintainer_notes(&selected)
+    render(&selected)
 }
 
 #[derive(Clone, Debug)]
@@ -467,8 +472,18 @@ impl Worker {
         } else {
             String::new()
         };
-        let maintainer_notes =
-            select_maintainer_notes(&self.prompts.base_dir, &target_commit_diff_only);
+        let maintainer_notes = select_notes(
+            "maintainer notes",
+            load_maintainer_notes(&self.prompts.base_dir),
+            &target_commit_diff_only,
+            render_maintainer_notes,
+        );
+        let library_notes = select_notes(
+            "library notes",
+            load_library_notes(&self.prompts.base_dir),
+            &target_commit_diff_only,
+            render_library_notes,
+        );
         let fixes_analysis = crate::worker::fixes_check::analyze_fixes_for_commit(
             self.project,
             worktree_path,
@@ -497,6 +512,7 @@ impl Worker {
             custom_prompt: self.custom_prompt.clone(),
             code_notes,
             maintainer_notes,
+            library_notes,
             planned_stages: Vec::new(),
             effort: self.effort,
             planned_efforts: std::collections::BTreeMap::new(),
@@ -964,6 +980,27 @@ mod prefetch_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_select_notes_renders_only_notes_the_diff_touches() {
+        let note = |name: &str, path: &str| {
+            MaintainerNote::parse(
+                name,
+                &format!("+++\ntitle = \"{name}\"\npaths = [\"{path}\"]\n+++\nbody\n"),
+            )
+            .unwrap()
+        };
+        let notes = vec![note("glib", "src/glib/"), note("libdrm", "src/drm/")];
+        let diff = "diff --git a/src/drm/kms.c b/src/drm/kms.c\n--- a/src/drm/kms.c\n+++ b/src/drm/kms.c\n@@ -1 +1 @@\n-a\n+b\n";
+        let block = select_notes("library notes", notes, diff, render_library_notes);
+        assert!(block.contains("<library_note library=\"libdrm\">"));
+        assert!(!block.contains("glib"));
+        assert!(!block.contains("<maintainer_note"));
+        assert_eq!(
+            select_notes("library notes", Vec::new(), diff, render_library_notes),
+            ""
+        );
+    }
 
     #[test]
     fn test_planned_stages_follow_the_resolved_fan_out() {
