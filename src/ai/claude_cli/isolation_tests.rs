@@ -32,6 +32,14 @@ fn cache_identity_excludes_unrestricted_responses() {
             ],
         );
         assert_ne!(provider.cache_identity(), before_json_schema);
+        let without_builtin_tools = cache_identity_with(
+            model,
+            &[
+                ("effort", effort),
+                ("completion_profile", Some("restricted-v2")),
+            ],
+        );
+        assert_ne!(provider.cache_identity(), without_builtin_tools);
     }
 }
 
