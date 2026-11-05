@@ -90,7 +90,7 @@ The daemon monitors configured mailing lists (NNTP) or forge webhooks, manages t
 sashiko
 ```
 
-(Or from source: `cargo run --release --bin sashiko`)
+(Or from source: `cargo run --release --bin sashiko`, or via Nix: `nix run github:sashiko-dev/sashiko`)
 
 By default (`log_level = "info"`), the daemon logs concise lifecycle milestones, completed reviews and bug analyses, outbound deliveries, warnings, and errors while clamping third-party transport crates to `warn`. Pass `--debug` (or set `log_level = "debug"` in `Settings.toml`) to inspect per-turn AI requests, git/worktree mechanics, HTTP read queries, and polling cycles, or set `RUST_LOG` for fine-grained `tracing` target filters.
 
@@ -116,7 +116,7 @@ sashiko-cli status
 sashiko-cli show latest
 ```
 
-(From source: `cargo run --bin sashiko-cli -- [OPTIONS] [COMMAND]`)
+(From source: `cargo run --bin sashiko-cli -- [OPTIONS] [COMMAND]`, or via Nix: `nix profile add github:sashiko-dev/sashiko`)
 
 For the complete command list, see the [CLI Reference](sashiko-cli.md).
 

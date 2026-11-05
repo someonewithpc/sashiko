@@ -11,6 +11,9 @@ See also: [main README](../README.md) for project overview and [Daemon Guide](da
 ```bash
 # From source
 cargo build --release --bin sashiko-cli
+
+# Or via Nix
+nix profile add github:sashiko-dev/sashiko
 ```
 
 For local reviews the main sashiko binary is also required:
