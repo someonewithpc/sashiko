@@ -39,7 +39,8 @@ use tokio::process::Command;
 use tracing::debug;
 
 use super::cli_common::{
-    CliIoError, IDLE_TIMEOUT, build_prompt, parse_inner_response, spawn_cli, write_prompt_and_wait,
+    CliIoError, IDLE_TIMEOUT, build_prompt_with, parse_inner_response, spawn_cli,
+    write_prompt_and_wait,
 };
 use crate::ai::{
     AiErrorClass, AiProvider, AiRequest, AiResponse, AiUsage, ClassifyAiError,
@@ -165,6 +166,20 @@ pub struct ClaudeCliProvider {
 /// end on, so the model can write it as text and keep inventing calls and
 /// results until the CLI times out.
 const TOOL_REPLY_SCHEMA: &str = r#"{"type":"object","minProperties":1,"properties":{"tool_calls":{"type":"array","minItems":1,"items":{"type":"object","properties":{"id":{"type":"string"},"function_name":{"type":"string"},"arguments":{"type":"object"}},"required":["id","function_name","arguments"]}},"content":{"type":"string"}}}"#;
+
+/// Ends a prompt with tools. --json-schema makes Claude Code take the reply
+/// through its StructuredOutput tool, and a reply written out as text instead
+/// costs a second turn in which Claude Code tells the model to call the tool
+/// and the model writes the whole reply again
+const STRUCTURED_OUTPUT_REPLY: &str = "RESPONSE FORMAT: Reply by calling the StructuredOutput tool exactly once. Never write the reply as text.\n\
+     To call tools, pass {\"tool_calls\": [{\"id\": \"c1\", \"function_name\": \"TOOL_NAME\", \"arguments\": {ARGS}}, {\"id\": \"c2\", \"function_name\": \"OTHER_TOOL\", \"arguments\": {ARGS2}}]}\n\
+     Put ALL tool calls in ONE tool_calls array.\n\
+     For your final answer, pass {\"content\": \"YOUR RESPONSE\"}\n\
+     Do not mix both.\n";
+
+fn build_prompt(request: &AiRequest) -> String {
+    build_prompt_with(request, STRUCTURED_OUTPUT_REPLY)
+}
 
 /// Returns the argv passed to `claude` (the prompt goes on stdin). Extracted
 /// so tests can assert that no tool survives.
@@ -382,6 +397,34 @@ mod tests {
         assert!(parsed["properties"]["content"].is_object());
         let without = build_claude_args("sonnet", None, false);
         assert!(!without.contains(&"--json-schema".to_string()));
+    }
+
+    #[test]
+    fn test_prompt_with_tools_asks_for_the_structured_output_tool() {
+        let request = AiRequest {
+            system: None,
+            messages: vec![crate::ai::AiMessage {
+                role: crate::ai::AiRole::User,
+                content: Some("hi".to_string()),
+                thought: None,
+                thought_signature: None,
+                tool_calls: None,
+                tool_call_id: None,
+            }],
+            tools: Some(vec![crate::ai::AiTool {
+                name: "git_log".to_string(),
+                description: "Show git log".to_string(),
+                parameters: json!({"type": "object"}),
+            }]),
+            temperature: None,
+            response_format: None,
+            context_tag: None,
+            reasoning_effort: None,
+        };
+        let prompt = build_prompt(&request);
+        assert!(prompt.contains("StructuredOutput tool"));
+        assert!(prompt.contains("tool_calls"));
+        assert!(!prompt.contains("SINGLE valid JSON object"));
     }
 
     #[test]
