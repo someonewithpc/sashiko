@@ -371,6 +371,21 @@ pub struct AiResponse {
     pub truncated: bool,
 }
 
+impl AiResponse {
+    /// The message the session runner records for this reply in the history
+    /// it sends next
+    pub fn to_assistant_message(&self) -> AiMessage {
+        AiMessage {
+            role: AiRole::Assistant,
+            content: self.content.clone(),
+            thought: self.thought.clone(),
+            thought_signature: self.thought_signature.clone(),
+            tool_calls: self.tool_calls.clone(),
+            tool_call_id: None,
+        }
+    }
+}
+
 /// Classifies a remote AI error using the typed stdio protocol payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "class", rename_all = "snake_case")]
@@ -1162,10 +1177,10 @@ pub fn create_provider_from_ai(ai: &AiSettings) -> Result<Arc<dyn AiProvider>> {
         }
         "claude-cli" => {
             let cfg = ai.claude_cli.as_ref();
-            Ok(Arc::new(claude_cli::ClaudeCliProvider {
-                model: ai.model.clone(),
-                effort: cfg.and_then(|c| c.effort.clone()),
-            }))
+            Ok(Arc::new(claude_cli::ClaudeCliProvider::new(
+                ai.model.clone(),
+                cfg.and_then(|c| c.effort.clone()),
+            )))
         }
         "devin-cli" => {
             let cfg = ai.devin_cli.as_ref();

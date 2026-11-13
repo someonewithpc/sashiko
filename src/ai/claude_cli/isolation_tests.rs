@@ -22,6 +22,7 @@ fn cache_identity_excludes_unrestricted_responses() {
         let provider = ClaudeCliProvider {
             model: model.to_string(),
             effort: effort.map(str::to_string),
+            ..Default::default()
         };
         assert_ne!(provider.cache_identity(), legacy);
         let before_json_schema = cache_identity_with(
@@ -41,6 +42,7 @@ fn cache_identity_tracks_model_and_effort() {
         ClaudeCliProvider {
             model: model.to_string(),
             effort: effort.map(str::to_string),
+            ..Default::default()
         }
         .cache_identity()
     };
