@@ -35,7 +35,7 @@ use serde_json::Value;
 use tokio::process::{Child, Command};
 use tracing::{debug, warn};
 
-use crate::ai::{AiRequest, AiResponse, AiRole, AiUsage, ToolCall};
+use crate::ai::{AiMessage, AiRequest, AiResponse, AiRole, AiUsage, ToolCall};
 
 /// The tags `build_prompt` frames turns with.
 const FRAME_TAGS: [&str; 6] = [
@@ -75,20 +75,44 @@ fn escape_frames(content: &str) -> String {
 /// whole review while a hung one costs only the wait.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(900);
 
+/// How a reply to a request with tools must look when the CLI gives the model
+/// no way to return it but text
+pub const TEXT_TOOL_REPLY: &str = "RESPONSE FORMAT: You MUST respond with a SINGLE valid JSON object only (no markdown, no explanation).\n\
+     To call tools: {\"tool_calls\": [{\"id\": \"c1\", \"function_name\": \"TOOL_NAME\", \"arguments\": {ARGS}}, {\"id\": \"c2\", \"function_name\": \"OTHER_TOOL\", \"arguments\": {ARGS2}}]}\n\
+     Put ALL tool calls in ONE tool_calls array. Do NOT output multiple JSON objects.\n\
+     Conversation role and tool-result tags are input framing only. Never emit XML tool calls.\n\
+     For your final answer: {\"content\": \"YOUR RESPONSE\"}\n\
+     The requested answer format applies to the decoded content string, not to this outer JSON envelope.\n\
+     JSON-escape newlines, tabs, quotes, and backslashes inside content. If plain text is requested, do not wrap that text in Markdown code fences.\n\
+     Do not mix both. Output exactly one JSON object.\n";
+
 /// Build the full text prompt from the AiRequest.
 /// Embeds system prompt, conversation history, tool definitions, and instructions.
 pub fn build_prompt(request: &AiRequest) -> String {
+    build_prompt_with(request, TEXT_TOOL_REPLY)
+}
+
+/// Like build_prompt, but ends a request with tools with tool_reply instead
+/// of TEXT_TOOL_REPLY, for a CLI that takes the reply some other way
+pub fn build_prompt_with(request: &AiRequest, tool_reply: &str) -> String {
     let mut out = String::new();
 
-    // System prompt
     if let Some(sys) = &request.system {
         out.push_str("<system>\n");
         out.push_str(&escape_frames(sys));
         out.push_str("\n</system>\n\n");
     }
 
-    // Conversation history
-    for msg in &request.messages {
+    out.push_str(&render_turns(&request.messages));
+    push_tool_section(&mut out, request, tool_reply);
+    out
+}
+
+/// Renders messages in the frames build_prompt uses, without the system
+/// prompt or the tool definitions
+pub fn render_turns(messages: &[AiMessage]) -> String {
+    let mut out = String::new();
+    for msg in messages {
         match &msg.role {
             AiRole::System => {
                 // Already handled above; skip embedded system messages
@@ -138,8 +162,10 @@ pub fn build_prompt(request: &AiRequest) -> String {
             }
         }
     }
+    out
+}
 
-    // Tool definitions and response instructions
+fn push_tool_section(out: &mut String, request: &AiRequest, tool_reply: &str) {
     if let Some(tools) = &request.tools
         && !tools.is_empty()
     {
@@ -151,16 +177,7 @@ pub fn build_prompt(request: &AiRequest) -> String {
             ));
         }
         out.push_str("</available_tools>\n\n");
-        out.push_str(
-            "RESPONSE FORMAT: You MUST respond with a SINGLE valid JSON object only (no markdown, no explanation).\n\
-             To call tools: {\"tool_calls\": [{\"id\": \"c1\", \"function_name\": \"TOOL_NAME\", \"arguments\": {ARGS}}, {\"id\": \"c2\", \"function_name\": \"OTHER_TOOL\", \"arguments\": {ARGS2}}]}\n\
-             Put ALL tool calls in ONE tool_calls array. Do NOT output multiple JSON objects.\n\
-             Conversation role and tool-result tags are input framing only. Never emit XML tool calls.\n\
-             For your final answer: {\"content\": \"YOUR RESPONSE\"}\n\
-             The requested answer format applies to the decoded content string, not to this outer JSON envelope.\n\
-             JSON-escape newlines, tabs, quotes, and backslashes inside content. If plain text is requested, do not wrap that text in Markdown code fences.\n\
-             Do not mix both. Output exactly one JSON object.\n",
-        );
+        out.push_str(tool_reply);
         if request
             .messages
             .iter()
@@ -185,8 +202,6 @@ pub fn build_prompt(request: &AiRequest) -> String {
         out.push_str(&instruction);
         out.push('\n');
     }
-
-    out
 }
 
 /// Recognizes tool-request prefixes without interpreting XML as executable calls.
