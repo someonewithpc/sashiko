@@ -110,11 +110,19 @@ Context window sizes:
 **What you get:**
 
 - No API key needed -- uses Claude Code's subscription auth.
-- Stateless: spawns `claude --print --output-format json` per request.
-  Built-in tools and user/project customizations (MCP servers, skills, hooks,
-  instruction files and automatic memory) are disabled explicitly. Each call
-  runs in a fresh temporary working directory with no session reuse.
-  This invocation was validated with Claude Code 2.1.170.
+- Spawns `claude --print --output-format json` per request. Built-in tools
+  and user/project customizations (MCP servers, skills, hooks, instruction
+  files and automatic memory) are disabled explicitly. This invocation was
+  validated with Claude Code 2.1.170.
+- A conversation runs in a temporary working directory of its own. Its later
+  turns resume the Claude Code session with `--resume --fork-session` and send
+  only the new messages, so the prompt cache holds the earlier turns.
+- Claude Code writes the transcripts of these sessions, patch text included,
+  under `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR/projects`). Sashiko
+  removes them with the working directory at the first claude-cli call after
+  a session has gone unused for an hour, the prompt cache's lifetime, or when
+  more than 256 sessions are kept. It also removes them all when it exits,
+  and on SIGINT, SIGTERM or SIGHUP.
 - Requests that offer Sashiko tools also pass `--json-schema`, so the model
   replies with a `tool_calls` or `content` object through Claude Code's
   StructuredOutput tool instead of free text. This needs a Claude Code version

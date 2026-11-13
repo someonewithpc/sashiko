@@ -19,7 +19,8 @@
 //!
 //! The prompt carries untrusted patch text; `--print` alone keeps native tools.
 //! `build_claude_args` disables tools and user/project MCP, skills, hooks,
-//! instructions and automatic memory. Requests run in fresh temporary directories.
+//! instructions and automatic memory. A conversation runs in a temporary
+//! directory of its own, removed with the transcripts Claude Code keeps for it.
 //! CLI authentication and inherited environment remain available for routing.
 //! Managed policy remains authoritative, including mandatory hooks and
 //! instructions; managed MCP configurations can prevent strict-mode startup.
@@ -39,14 +40,20 @@ use tokio::process::Command;
 use tracing::debug;
 
 use super::cli_common::{
-    CliIoError, IDLE_TIMEOUT, build_prompt_with, parse_inner_response, spawn_cli,
-    write_prompt_and_wait,
+    CliIoError, IDLE_TIMEOUT, build_prompt_with, parse_inner_response, render_turns, spawn_cli,
+    write_prompt_and_wait, xml_retry_note,
 };
+use std::sync::Arc;
+use tracing::warn;
+
+mod sessions;
 use crate::ai::{
     AiErrorClass, AiProvider, AiRequest, AiResponse, AiUsage, ClassifyAiError,
     ProviderCapabilities, cache_identity_with,
 };
 use crate::utils::{redact_secret, utf8_prefix};
+pub use sessions::remove_session_files;
+use sessions::{Lineage, PrefixKey, Session, SessionDir, Sessions, release_dir};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClaudeCliError {
@@ -62,6 +69,8 @@ pub enum ClaudeCliError {
     Stdin(String),
     #[error("claude CLI error: {0}")]
     Cli(String),
+    #[error("claude CLI could not resume its session: {0}")]
+    Resume(String),
     #[error("Failed to parse claude CLI JSON output: {0}")]
     Parse(String),
     #[error("claude CLI returned an empty reply to a request with tools")]
@@ -101,6 +110,12 @@ impl ClassifyAiError for ClaudeCliError {
                 retry_after: Duration::from_secs(30),
             },
             ClaudeCliError::Cli(_) => AiErrorClass::Fatal,
+            // Claude Code reports a passing overload the same way as a lost
+            // session. A retry after the backoff resumes the same session,
+            // and a second failure starts the conversation over instead.
+            ClaudeCliError::Resume(_) => AiErrorClass::Transient {
+                retry_after: Duration::from_secs(30),
+            },
             ClaudeCliError::Parse(_) => AiErrorClass::Fatal,
             ClaudeCliError::EmptyReply => AiErrorClass::Transient {
                 retry_after: Duration::from_secs(30),
@@ -156,9 +171,29 @@ fn extract_cli_result(outer: &Value, has_schema: bool) -> Result<String, ClaudeC
     Ok(result)
 }
 
+#[derive(Default)]
 pub struct ClaudeCliProvider {
     pub model: String,
     pub effort: Option<String>,
+    sessions: Sessions,
+}
+
+impl ClaudeCliProvider {
+    pub fn new(model: String, effort: Option<String>) -> Self {
+        Self {
+            model,
+            effort,
+            sessions: Sessions::default(),
+        }
+    }
+}
+
+/// One claude invocation: a whole conversation in a new session, or the
+/// messages a session has not seen yet
+struct Turn {
+    prompt: String,
+    dir: Arc<SessionDir>,
+    resume: Option<(String, PrefixKey)>,
 }
 
 /// Constrains a reply to the tool-calling format `build_prompt` asks for. With
@@ -192,7 +227,6 @@ pub fn build_claude_args(model: &str, effort: Option<&str>, has_tools: bool) -> 
         "--print".to_string(),
         "--output-format".to_string(),
         "json".to_string(),
-        "--no-session-persistence".to_string(),
         "--tools".to_string(),
         String::new(),
         "--disallowedTools".to_string(),
@@ -235,12 +269,82 @@ impl ClaudeCliProvider {
         binary: &std::ffi::OsStr,
         idle_timeout: Duration,
     ) -> Result<AiResponse> {
-        let prompt = build_prompt(&request);
+        let lineage = Lineage::of(&request, &self.model, self.effort.as_deref());
+        if let Some(continuation) = self.sessions.find(&request, &lineage).await {
+            let mut prompt = render_turns(&request.messages[continuation.known..]);
+            prompt.push_str(xml_retry_note(&request).unwrap_or_default());
+            let turn = Turn {
+                prompt,
+                dir: continuation.session.dir,
+                resume: Some((continuation.session.id, continuation.parent)),
+            };
+            match self
+                .run_turn(&request, &lineage, turn, binary, idle_timeout)
+                .await
+            {
+                Err(e) => match e.downcast::<ClaudeCliError>() {
+                    Ok(ClaudeCliError::Cli(reason)) if !continuation.failed_before => {
+                        self.sessions.mark_failed(continuation.parent);
+                        return Err(ClaudeCliError::Resume(reason).into());
+                    }
+                    Ok(ClaudeCliError::Cli(reason)) => {
+                        warn!(
+                            "{}claude-cli could not resume its session again, starting over: {reason}",
+                            crate::ai::get_log_prefix()
+                        );
+                        self.sessions.forget(continuation.parent).await;
+                    }
+                    Ok(other) => return Err(other.into()),
+                    Err(e) => return Err(e),
+                },
+                result => return result,
+            }
+        }
+        let dir = SessionDir::new().map_err(ClaudeCliError::WorkingDirectory)?;
+        let turn = Turn {
+            prompt: build_prompt(&request),
+            dir: Arc::new(dir),
+            resume: None,
+        };
+        self.run_turn(&request, &lineage, turn, binary, idle_timeout)
+            .await
+    }
 
-        debug!("claude-cli prompt length: {} chars", prompt.len());
+    async fn run_turn(
+        &self,
+        request: &AiRequest,
+        lineage: &Lineage,
+        turn: Turn,
+        binary: &std::ffi::OsStr,
+        idle_timeout: Duration,
+    ) -> Result<AiResponse> {
+        let dir = Arc::clone(&turn.dir);
+        let result = self
+            .run_claude(request, lineage, turn, binary, idle_timeout)
+            .await;
+        release_dir(dir).await;
+        result
+    }
+
+    async fn run_claude(
+        &self,
+        request: &AiRequest,
+        lineage: &Lineage,
+        turn: Turn,
+        binary: &std::ffi::OsStr,
+        idle_timeout: Duration,
+    ) -> Result<AiResponse> {
+        debug!(
+            "claude-cli prompt length: {} chars{}",
+            turn.prompt.len(),
+            if turn.resume.is_some() {
+                ", resumed"
+            } else {
+                ""
+            }
+        );
 
         let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
-        let working_directory = tempfile::tempdir().map_err(ClaudeCliError::WorkingDirectory)?;
         let mut command = Command::new(binary);
         command
             .args(build_claude_args(
@@ -248,10 +352,13 @@ impl ClaudeCliProvider {
                 self.effort.as_deref(),
                 has_tools,
             ))
-            .current_dir(working_directory.path())
+            .current_dir(turn.dir.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some((id, _)) = &turn.resume {
+            command.args(["--resume", id, "--fork-session"]);
+        }
 
         let child = spawn_cli(&mut command).map_err(|e| ClaudeCliError::Spawn(e.to_string()))?;
 
@@ -259,7 +366,7 @@ impl ClaudeCliProvider {
         // forever, while one that is still reporting progress runs as long as
         // the review takes. The write is inside it, so a prompt that cannot be
         // delivered is bounded the same way.
-        let output = write_prompt_and_wait("claude-cli", child, prompt, idle_timeout)
+        let output = write_prompt_and_wait("claude-cli", child, turn.prompt, idle_timeout)
             .await
             .map_err(|e| match e {
                 CliIoError::Write(e) => ClaudeCliError::Stdin(e.to_string()),
@@ -281,7 +388,18 @@ impl ClaudeCliProvider {
         let usage = parse_usage(&outer);
 
         // Parse the inner response — tool calls or content
-        parse_inner_response("claude-cli", &result_text, usage)
+        let response = parse_inner_response("claude-cli", &result_text, usage)?;
+
+        if let Some(id) = outer["session_id"].as_str() {
+            let session = Session {
+                id: id.to_string(),
+                dir: turn.dir,
+            };
+            let parent = turn.resume.map(|(_, parent)| parent);
+            let key = lineage.answered(&response.to_assistant_message());
+            self.sessions.keep(key, session, parent).await;
+        }
+        Ok(response)
     }
 }
 

@@ -642,7 +642,7 @@ fn exit_worker_with_error(error: String) -> ! {
         "patchset_id": 0,
         "error": error
     }));
-    std::process::exit(1);
+    exit_dropping_sessions(1);
 }
 
 /// Formats a top-level CLI error chain using `Display` instead of `Debug`,
@@ -697,7 +697,7 @@ fn format_daemon_startup_error(settings_path: &Path, reason: &str) -> String {
 async fn main() {
     if let Err(err) = try_main().await {
         eprintln!("Error: {}", format_cli_error(err.as_ref()));
-        std::process::exit(1);
+        exit_dropping_sessions(1);
     }
 }
 
@@ -1992,6 +1992,7 @@ async fn run_daemon(
     // Each CLI runs in a process group of its own, so the terminal's signal
     // never reached it, and exit() runs no destructor that would.
     sashiko::ai::cli_common::kill_live_groups();
+    sashiko::ai::claude_cli::remove_session_files();
     info!("Shutdown complete.");
     std::process::exit(0);
 }
@@ -2475,6 +2476,14 @@ fn release_region_on_panic() {
     }));
 }
 
+/// Exits with code once the work is done. std::process::exit drops nothing,
+/// so the claude-cli sessions the providers still hold would leave their
+/// transcripts behind
+fn exit_dropping_sessions(code: i32) -> ! {
+    sashiko::ai::claude_cli::remove_session_files();
+    std::process::exit(code);
+}
+
 /// Stops the CLIs a review spawned, and gives the screen back, when the review
 /// is interrupted.
 ///
@@ -2508,6 +2517,7 @@ fn exit_on_interrupt(release_region: bool) {
         tokio::spawn(async move {
             if signalled.recv().await.is_some() {
                 sashiko::ai::cli_common::kill_live_groups();
+                sashiko::ai::claude_cli::remove_session_files();
                 if release_region {
                     // Scrolling back to the whole screen, leaving the cursor
                     // where the output had reached, and a line to report from.
@@ -3311,10 +3321,10 @@ async fn handle_review_command(
     }
 
     if result_has_error(&result) {
-        std::process::exit(3);
+        exit_dropping_sessions(3);
     }
     if result_has_high_or_critical_findings(&result) {
-        std::process::exit(1);
+        exit_dropping_sessions(1);
     }
 
     Ok(())
@@ -3776,7 +3786,7 @@ async fn handle_scan_command(
 
     let code = scan_exit_code(&summary);
     if code != 0 {
-        std::process::exit(code);
+        exit_dropping_sessions(code);
     }
 
     Ok(())
@@ -3825,6 +3835,7 @@ async fn handle_bugs_evaluate_security_command(
     if let Some(bug_ref) = bug {
         let res = worker.evaluate_single_bug_security(&bug_ref).await;
         sashiko::ai::cli_common::kill_live_groups();
+        sashiko::ai::claude_cli::remove_session_files();
         let (updated_bug, evaluation) = res?;
         match format {
             OutputFormat::Json => {
@@ -3875,6 +3886,7 @@ async fn handle_bugs_evaluate_security_command(
         .evaluate_bugs_security_batch(limit, concurrency)
         .await;
     sashiko::ai::cli_common::kill_live_groups();
+    sashiko::ai::claude_cli::remove_session_files();
     match format {
         OutputFormat::Json => {
             println!(

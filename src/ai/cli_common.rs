@@ -178,21 +178,8 @@ fn push_tool_section(out: &mut String, request: &AiRequest, tool_reply: &str) {
         }
         out.push_str("</available_tools>\n\n");
         out.push_str(tool_reply);
-        if request
-            .messages
-            .iter()
-            .rev()
-            .find(|message| message.role == AiRole::Assistant)
-            .is_some_and(|message| {
-                message.tool_calls.as_ref().is_none_or(Vec::is_empty)
-                    && message.content.as_deref().is_some_and(is_xml_tool_reply)
-            })
-        {
-            out.push_str(
-                "Your previous reply used unsupported XML tool-call syntax. No tool was executed from that reply. \
-                 Reissue the intended calls as a JSON object with a tool_calls array, using id, function_name, and arguments. \
-                 Do not put tool requests in content or replace them with a final stage answer.\n",
-            );
+        if let Some(note) = xml_retry_note(request) {
+            out.push_str(note);
         }
     } else if let Some(instruction) = request
         .response_format
@@ -202,6 +189,30 @@ fn push_tool_section(out: &mut String, request: &AiRequest, tool_reply: &str) {
         out.push_str(&instruction);
         out.push('\n');
     }
+}
+
+/// Tells the model no tool ran when its latest reply wrote the calls as XML.
+/// It depends on that reply, so a CLI that resumes a session, and sends only
+/// the new turns, adds it to them as well
+pub fn xml_retry_note(request: &AiRequest) -> Option<&'static str> {
+    let has_tools = request
+        .tools
+        .as_ref()
+        .is_some_and(|tools| !tools.is_empty());
+    let xml_reply = request
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == AiRole::Assistant)
+        .is_some_and(|message| {
+            message.tool_calls.as_ref().is_none_or(Vec::is_empty)
+                && message.content.as_deref().is_some_and(is_xml_tool_reply)
+        });
+    (has_tools && xml_reply).then_some(
+        "Your previous reply used unsupported XML tool-call syntax. No tool was executed from that reply. \
+         Reissue the intended calls as a JSON object with a tool_calls array, using id, function_name, and arguments. \
+         Do not put tool requests in content or replace them with a final stage answer.\n",
+    )
 }
 
 /// Recognizes tool-request prefixes without interpreting XML as executable calls.

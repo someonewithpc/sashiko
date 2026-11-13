@@ -456,14 +456,7 @@ impl<'a> SessionRunner<'a> {
                     total_cached_tokens.saturating_add(usage.cached_tokens.unwrap_or(0));
             }
 
-            let assistant_msg = AiMessage {
-                role: AiRole::Assistant,
-                content: resp.content.clone(),
-                thought: resp.thought.clone(),
-                thought_signature: resp.thought_signature.clone(),
-                tool_calls: resp.tool_calls.clone(),
-                tool_call_id: None,
-            };
+            let assistant_msg = resp.to_assistant_message();
             history.push(assistant_msg.clone());
             log_history.push(assistant_msg);
 
