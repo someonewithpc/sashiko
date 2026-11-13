@@ -1727,6 +1727,7 @@ async fn run_daemon(
     // Each CLI runs in a process group of its own, so the terminal's signal
     // never reached it, and exit() runs no destructor that would.
     sashiko::ai::cli_common::kill_live_groups();
+    sashiko::ai::claude_cli::remove_session_files();
     info!("Shutdown complete.");
     std::process::exit(0);
 }
@@ -2239,6 +2240,7 @@ fn exit_on_interrupt(release_region: bool) {
         tokio::spawn(async move {
             if signalled.recv().await.is_some() {
                 sashiko::ai::cli_common::kill_live_groups();
+                sashiko::ai::claude_cli::remove_session_files();
                 if release_region {
                     // Scrolling back to the whole screen, leaving the cursor
                     // where the output had reached, and a line to report from.

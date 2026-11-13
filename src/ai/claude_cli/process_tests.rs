@@ -64,6 +64,7 @@ async fn cli_disables_native_tools_and_configuration_in_an_empty_directory() {
     let provider = ClaudeCliProvider {
         model: "test-model[1m]".to_string(),
         effort: Some("high".to_string()),
+        ..Default::default()
     };
     let expected_prompt = build_prompt(&request());
     let response = provider
@@ -96,7 +97,8 @@ async fn cli_disables_native_tools_and_configuration_in_an_empty_directory() {
     assert_eq!(value("--setting-sources"), "");
     assert!(args.contains(&"--strict-mcp-config"));
     assert!(args.contains(&"--disable-slash-commands"));
-    assert!(args.contains(&"--no-session-persistence"));
+    assert!(!args.contains(&"--no-session-persistence"));
+    assert!(!args.contains(&"--resume"));
     assert_eq!(value("--model"), provider.model);
     assert_eq!(value("--effort"), "high");
     let mcp: Value = serde_json::from_str(value("--mcp-config")).unwrap();
@@ -121,6 +123,7 @@ async fn cli_removes_its_scratch_directory_after_an_error() {
     let provider = ClaudeCliProvider {
         model: "test-model".to_string(),
         effort: None,
+        ..Default::default()
     };
     let error = provider
         .generate_content_with_binary(
@@ -156,6 +159,7 @@ exit 0
     let provider = ClaudeCliProvider {
         model: "test-model".to_string(),
         effort: None,
+        ..Default::default()
     };
     let error = provider
         .generate_content_with_binary(
@@ -185,6 +189,7 @@ exit 1
     let provider = ClaudeCliProvider {
         model: "test-model".to_string(),
         effort: None,
+        ..Default::default()
     };
     let error = timeout(
         Duration::from_secs(5),
@@ -210,6 +215,7 @@ async fn cli_timeout_covers_a_stalled_stdin_write() {
     let provider = ClaudeCliProvider {
         model: "test-model".to_string(),
         effort: None,
+        ..Default::default()
     };
     let error = timeout(
         Duration::from_secs(3),
@@ -240,6 +246,7 @@ printf '%s' '{"result":"OK","is_error":false}'
     let provider = ClaudeCliProvider {
         model: "test-model".to_string(),
         effort: None,
+        ..Default::default()
     };
     let response = timeout(
         Duration::from_secs(10),
@@ -272,6 +279,7 @@ async fn cli_passes_json_schema_only_for_requests_with_tools() {
     let provider = ClaudeCliProvider {
         model: "test-model".to_string(),
         effort: None,
+        ..Default::default()
     };
     for (request, expect_schema) in [
         (request(), false),
@@ -297,4 +305,115 @@ async fn cli_passes_json_schema_only_for_requests_with_tools() {
             expect_schema
         );
     }
+}
+
+/// A claude that records each call as argsN and stdinN, answers with session
+/// sN, and fails call N when the fixture holds failN
+fn session_cli() -> tempfile::TempDir {
+    cli_script(
+        r#"#!/bin/sh
+d=${0%/*}
+n=$(($(cat "$d/n" 2>/dev/null || echo 0) + 1))
+echo "$n" > "$d/n"
+printf '%s\n' "$PWD" "$@" > "$d/args$n"
+cat > "$d/stdin$n"
+if [ -f "$d/fail$n" ]; then
+  printf '%s' '{"result":"No conversation found","is_error":true}'
+  exit 1
+fi
+printf '{"result":"OK","is_error":false,"session_id":"s%s"}' "$n"
+"#,
+    )
+}
+
+fn call_record(fixture: &tempfile::TempDir, n: usize) -> (PathBuf, Vec<String>, String) {
+    let args = std::fs::read_to_string(fixture.path().join(format!("args{n}"))).unwrap();
+    let mut lines = args.lines().map(str::to_string);
+    let cwd = PathBuf::from(lines.next().unwrap());
+    let stdin = std::fs::read_to_string(fixture.path().join(format!("stdin{n}"))).unwrap();
+    (cwd, lines.collect(), stdin)
+}
+
+fn turn(role: AiRole, content: &str) -> AiMessage {
+    AiMessage {
+        role,
+        content: Some(content.to_string()),
+        thought: None,
+        thought_signature: None,
+        tool_calls: None,
+        tool_call_id: None,
+    }
+}
+
+fn continued(previous: &AiRequest, reply: &str, next: &str) -> AiRequest {
+    let mut request = previous.clone();
+    request.messages.push(turn(AiRole::Assistant, reply));
+    request.messages.push(turn(AiRole::User, next));
+    request
+}
+
+fn resume_target(args: &[String]) -> Option<&str> {
+    let index = args.iter().position(|arg| arg == "--resume")?;
+    assert_eq!(args[index + 2], "--fork-session");
+    Some(args[index + 1].as_str())
+}
+
+#[tokio::test]
+async fn later_turns_resume_the_session_with_only_the_new_messages() {
+    let fixture = session_cli();
+    let binary = fixture.path().join("claude");
+    let provider = ClaudeCliProvider::new("test-model".to_string(), None);
+    let first = request();
+    let second = continued(&first, "OK", "Look closer.");
+    let third = continued(&second, "OK", "Once more.");
+    for request in [first, second.clone(), third.clone()] {
+        provider
+            .generate_content_with_binary(request, binary.as_os_str(), Duration::from_secs(600))
+            .await
+            .unwrap();
+    }
+
+    let (cwd1, args1, stdin1) = call_record(&fixture, 1);
+    let (cwd2, args2, stdin2) = call_record(&fixture, 2);
+    let (cwd3, args3, stdin3) = call_record(&fixture, 3);
+    assert_eq!(resume_target(&args1), None);
+    assert_eq!(stdin1, build_prompt(&request()));
+    assert_eq!(resume_target(&args2), Some("s1"));
+    assert_eq!(stdin2, render_turns(&second.messages[2..]));
+    assert_eq!(resume_target(&args3), Some("s2"));
+    assert_eq!(stdin3, render_turns(&third.messages[4..]));
+    assert_eq!(cwd1, cwd2);
+    assert_eq!(cwd2, cwd3);
+    assert!(
+        cwd1.exists(),
+        "a session's directory lives while it can be resumed"
+    );
+
+    drop(provider);
+    assert!(!cwd1.exists(), "dropping the provider removes its sessions");
+}
+
+#[tokio::test]
+async fn a_failed_resume_starts_the_conversation_over() {
+    let fixture = session_cli();
+    std::fs::write(fixture.path().join("fail2"), "").unwrap();
+    let binary = fixture.path().join("claude");
+    let provider = ClaudeCliProvider::new("test-model".to_string(), None);
+    let first = request();
+    let second = continued(&first, "OK", "Look closer.");
+    for request in [first, second.clone()] {
+        provider
+            .generate_content_with_binary(request, binary.as_os_str(), Duration::from_secs(600))
+            .await
+            .unwrap();
+    }
+
+    let (cwd1, _, _) = call_record(&fixture, 1);
+    let (_, args2, _) = call_record(&fixture, 2);
+    let (cwd3, args3, stdin3) = call_record(&fixture, 3);
+    assert_eq!(resume_target(&args2), Some("s1"));
+    assert_eq!(resume_target(&args3), None);
+    assert_eq!(stdin3, build_prompt(&second));
+    assert_ne!(cwd1, cwd3);
+    assert!(!cwd1.exists(), "the session that failed to resume is gone");
 }

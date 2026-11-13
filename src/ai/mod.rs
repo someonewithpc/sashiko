@@ -918,10 +918,10 @@ pub fn create_provider_from_ai(ai: &AiSettings) -> Result<Arc<dyn AiProvider>> {
         }
         "claude-cli" => {
             let cfg = ai.claude_cli.as_ref();
-            Ok(Arc::new(claude_cli::ClaudeCliProvider {
-                model: ai.model.clone(),
-                effort: cfg.and_then(|c| c.effort.clone()),
-            }))
+            Ok(Arc::new(claude_cli::ClaudeCliProvider::new(
+                ai.model.clone(),
+                cfg.and_then(|c| c.effort.clone()),
+            )))
         }
         "devin-cli" => {
             let cfg = ai.devin_cli.as_ref();
