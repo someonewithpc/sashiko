@@ -83,7 +83,7 @@ Uses a local [Claude Code](https://claude.com/claude-code) installation as
 the completion backend. This uses your Claude Code subscription -- no
 per-token charge, no API key.
 
-**Prerequisites:** Install Claude Code 2.1.308 or later and sign in.
+**Prerequisites:** Install Claude Code 2.1.323 or later and sign in.
 Verify with `claude --version`. Sashiko asks for the version before its
 first call and stops with an error naming both versions when the installed
 one is older. Update with `claude update`.
@@ -130,6 +130,11 @@ Context window sizes:
   replies with a `tool_calls` or `content` object through Claude Code's
   StructuredOutput tool instead of free text. This needs a Claude Code version
   with `--json-schema`; it was validated with 2.1.308.
+- Claude Code is run with `--exclude-dynamic-system-prompt-sections`, which
+  moves the working directory, environment and date out of its system
+  prompt. Conversations in different directories then share that prompt in
+  the cache. The flag was validated with 2.1.323, which sets the minimum
+  version above.
 - Earlier claude-cli response-cache entries are not reused with this restricted
   completion profile; responses are regenerated on the next request.
 - User/project settings are not loaded. CLI subscription credentials and
