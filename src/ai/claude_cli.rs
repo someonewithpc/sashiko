@@ -27,6 +27,12 @@
 //! These restrictions disable agent functionality, not operating-system
 //! access: the CLI is still trusted to read credentials and contact the model.
 //!
+//! Sashiko's system prompt goes in a file passed with
+//! `--append-system-prompt-file`, after Claude Code's own, rather than at the
+//! start of the user message: Claude Code marks a cache breakpoint at the end
+//! of the system prompt but none inside the first message, so only there can
+//! conversations that share a system prompt read it from the cache.
+//!
 //! A request with tools also gets `--json-schema`. Claude Code serves it with
 //! a single StructuredOutput tool that takes the reply object and nothing
 //! else, so it gives the model no access to files, commands or the network.
@@ -40,8 +46,8 @@ use tokio::process::Command;
 use tracing::debug;
 
 use super::cli_common::{
-    CliIoError, IDLE_TIMEOUT, build_prompt_with, parse_inner_response, render_turns, spawn_cli,
-    write_prompt_and_wait, xml_retry_note,
+    CliIoError, IDLE_TIMEOUT, build_turns_with, parse_inner_response, render_system, render_turns,
+    spawn_cli, write_prompt_and_wait, xml_retry_note,
 };
 use std::sync::Arc;
 use tracing::warn;
@@ -288,8 +294,10 @@ const STRUCTURED_OUTPUT_REPLY: &str = "RESPONSE FORMAT: Reply by calling the Str
      The requested answer format applies to the content string. If plain text is requested, do not wrap that text in Markdown code fences.\n\
      Do not mix both.\n";
 
+/// The first message of a conversation. The system prompt goes separately,
+/// through the session directory
 fn build_prompt(request: &AiRequest) -> String {
-    build_prompt_with(request, STRUCTURED_OUTPUT_REPLY)
+    build_turns_with(request, STRUCTURED_OUTPUT_REPLY)
 }
 
 /// Returns the argv passed to `claude` (the prompt goes on stdin). Extracted
@@ -391,7 +399,11 @@ impl ClaudeCliProvider {
                 result => return result,
             }
         }
-        let dir = SessionDir::new().map_err(ClaudeCliError::WorkingDirectory)?;
+        let system = request.system.as_deref().map(render_system);
+        let dir = tokio::task::spawn_blocking(move || SessionDir::new(system.as_deref()))
+            .await
+            .unwrap_or_else(|e| Err(std::io::Error::other(e)))
+            .map_err(ClaudeCliError::WorkingDirectory)?;
         let turn = Turn {
             prompt: build_prompt(&request),
             dir: Arc::new(dir),
@@ -447,6 +459,9 @@ impl ClaudeCliProvider {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(path) = turn.dir.system_prompt() {
+            command.arg("--append-system-prompt-file").arg(path);
+        }
         if let Some((id, _)) = &turn.resume {
             command.args(["--resume", id, "--fork-session"]);
         }

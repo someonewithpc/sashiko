@@ -99,13 +99,26 @@ pub fn build_prompt_with(request: &AiRequest, tool_reply: &str) -> String {
 
     if let Some(sys) = &request.system {
         out.push_str("<system>\n");
-        out.push_str(&escape_frames(sys));
+        out.push_str(&render_system(sys));
         out.push_str("\n</system>\n\n");
     }
 
-    out.push_str(&render_turns(&request.messages));
+    out.push_str(&build_turns_with(request, tool_reply));
+    out
+}
+
+/// Like build_prompt_with, without the system prompt, for a CLI that takes
+/// the system prompt separately
+pub fn build_turns_with(request: &AiRequest, tool_reply: &str) -> String {
+    let mut out = render_turns(&request.messages);
     push_tool_section(&mut out, request, tool_reply);
     out
+}
+
+/// The system prompt with the frame tags of the turns escaped, so text
+/// quoted in it cannot pose as a turn
+pub fn render_system(system: &str) -> String {
+    escape_frames(system)
 }
 
 /// Renders messages in the frames build_prompt uses, without the system
