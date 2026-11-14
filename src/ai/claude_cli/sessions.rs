@@ -53,31 +53,46 @@ const MAX_SESSIONS: usize = 256;
 /// transcripts hold the patch under review
 const IDLE_LIFETIME: Duration = Duration::from_secs(60 * 60);
 
-/// Working directories of sessions still alive, for removal on an exit that
-/// runs no destructor
+/// Directories of sessions still alive, for removal on an exit that runs no
+/// destructor
 static LIVE_DIRS: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(Default::default);
 
-/// A working directory and the transcripts Claude Code keeps for it.
+/// A working directory, the lock that says its process is alive, and the
+/// transcripts Claude Code keeps for it.
 ///
 /// Claude Code files a session under the directory it ran in, and `--resume`
 /// looks it up there, so every turn of a conversation runs in the same one.
+/// The working directory is empty: the lock sits next to it, in a temporary
+/// directory that holds both.
 pub(super) struct SessionDir {
-    cwd: PathBuf,
+    root: PathBuf,
+    /// Held for as long as the session lives. The kernel releases it when the
+    /// process dies, however it dies, so a sweep that can take it knows the
+    /// directory was left behind
+    lock: Option<std::fs::File>,
 }
 
 impl SessionDir {
     pub(super) fn new() -> std::io::Result<Self> {
-        let cwd = tempfile::tempdir()?.keep();
-        let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+        let root = tempfile::Builder::new()
+            .prefix(&dir_prefix(this_boot()))
+            .tempdir()?
+            .keep();
+        let root = std::fs::canonicalize(&root).unwrap_or(root);
         LIVE_DIRS
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(cwd.clone());
-        Ok(Self { cwd })
+            .insert(root.clone());
+        let mut dir = Self { root, lock: None };
+        let lock = std::fs::File::create(dir.root.join(LOCK_FILE))?;
+        lock.lock()?;
+        dir.lock = Some(lock);
+        std::fs::create_dir(dir.path())?;
+        Ok(dir)
     }
 
-    pub(super) fn path(&self) -> &Path {
-        &self.cwd
+    pub(super) fn path(&self) -> PathBuf {
+        self.root.join("cwd")
     }
 }
 
@@ -86,8 +101,8 @@ impl Drop for SessionDir {
         LIVE_DIRS
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.cwd);
-        remove_dir_and_transcripts(&self.cwd);
+            .remove(&self.root);
+        remove_dir_and_transcripts(&self.root);
     }
 }
 
@@ -96,18 +111,20 @@ impl Drop for SessionDir {
 /// For an exit through std::process::exit, which drops nothing.
 pub fn remove_session_files() {
     let dirs = std::mem::take(&mut *LIVE_DIRS.lock().unwrap_or_else(|e| e.into_inner()));
-    for cwd in dirs {
-        remove_dir_and_transcripts(&cwd);
+    for root in dirs {
+        remove_dir_and_transcripts(&root);
     }
 }
 
-fn remove_dir_and_transcripts(cwd: &Path) {
-    remove_files(cwd, projects_dir().as_deref());
+fn remove_dir_and_transcripts(root: &Path) {
+    remove_files(root, projects_dir().as_deref());
 }
 
-fn remove_files(cwd: &Path, projects: Option<&Path>) {
-    remove_logged(cwd);
-    if let Some(transcripts) = projects.and_then(|projects| transcripts_dir_in(projects, cwd)) {
+fn remove_files(root: &Path, projects: Option<&Path>) {
+    remove_logged(root);
+    if let Some(transcripts) =
+        projects.and_then(|projects| transcripts_dir_in(projects, &root.join("cwd")))
+    {
         remove_logged(&transcripts);
     }
 }
@@ -135,15 +152,150 @@ fn projects_dir() -> Option<PathBuf> {
     Some(config.join("projects"))
 }
 
-/// The directory in projects for cwd: the path with every character other
-/// than an ASCII letter or digit replaced by a dash
+/// The directory in projects that holds the transcripts of sessions run in
+/// cwd
 fn transcripts_dir_in(projects: &Path, cwd: &Path) -> Option<PathBuf> {
-    let name: String = cwd
-        .to_str()?
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    Some(projects.join(name))
+    Some(projects.join(dashed(cwd)?))
+}
+
+/// The name Claude Code files a working directory's transcripts under: the
+/// path with every character other than an ASCII letter or digit replaced by
+/// a dash. Different paths can share one, so a name alone never proves whose
+/// transcripts a directory holds
+fn dashed(path: &Path) -> Option<String> {
+    Some(
+        path.to_str()?
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect(),
+    )
+}
+
+const DIR_MARK: &str = "sashiko-claude-";
+const LOCK_FILE: &str = "lock";
+
+/// The first eight hex digits of the kernel's boot id, the same in every
+/// namespace on this kernel and new on every boot. Where it cannot be read,
+/// every directory looks like this boot's, which only ever keeps more
+fn this_boot() -> &'static str {
+    static BOOT: LazyLock<String> = LazyLock::new(|| {
+        std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .ok()
+            .map(|id| id.chars().filter(char::is_ascii_hexdigit).take(8).collect())
+            .filter(|id: &String| id.len() == 8)
+            .unwrap_or_else(|| "0".repeat(8))
+    });
+    &BOOT
+}
+
+/// Starts the name of every session directory with the boot it was made in
+fn dir_prefix(boot: &str) -> String {
+    format!("{DIR_MARK}{boot}-")
+}
+
+/// The boot named at the start of a session directory's name, written by
+/// dir_prefix
+fn dir_boot(name: &str) -> Option<&str> {
+    let (boot, rest) = name.strip_prefix(DIR_MARK)?.split_once('-')?;
+    (boot.len() == 8 && boot.chars().all(|c| c.is_ascii_hexdigit()) && !rest.is_empty())
+        .then_some(boot)
+}
+
+/// Removes the session directories, and their transcripts, that sashiko
+/// processes left when they died.
+///
+/// No handler runs on SIGKILL, or when the kernel kills the process for
+/// memory, so the transcripts of the reviews it was running, untrusted patch
+/// text among them, would stay in Claude Code's config indefinitely. A
+/// directory is removed only when its owner is known to be gone: its lock is
+/// free, or it was made in an earlier boot. Another review's directory, in
+/// this PID namespace or any other, keeps its lock.
+///
+/// Runs once per process, on a thread of its own, so a provider created on
+/// the runtime does not wait for the directory listings.
+pub fn remove_orphaned_session_files() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        std::thread::spawn(|| {
+            let temp = std::env::temp_dir();
+            let temp = std::fs::canonicalize(&temp).unwrap_or(temp);
+            if let Some(projects) = projects_dir() {
+                remove_orphans(&temp, &projects, this_boot());
+            }
+        });
+    });
+}
+
+fn remove_orphans(temp: &Path, projects: &Path, boot: &str) {
+    for (root, name) in dir_entries(temp) {
+        if let Some(made) = dir_boot(&name)
+            && (made != boot || lock_is_free(&root))
+        {
+            remove_files(&root, Some(projects));
+        }
+    }
+    let Some(prefix) = dashed(&temp.join(DIR_MARK)) else {
+        return;
+    };
+    for (transcripts, name) in dir_entries(projects) {
+        if !name.starts_with(&prefix) {
+            continue;
+        }
+        let Some(root) = transcript_cwd(&transcripts)
+            .filter(|cwd| cwd.file_name().is_some_and(|name| name == "cwd"))
+            .and_then(|cwd| Some(cwd.parent()?.to_path_buf()))
+            .filter(|root| root.parent() == Some(temp))
+        else {
+            continue;
+        };
+        let made = root.file_name().and_then(|n| n.to_str()).and_then(dir_boot);
+        if made.is_some_and(|made| made != boot) && !root.exists() {
+            remove_logged(&transcripts);
+        }
+    }
+}
+
+/// Whether the lock in a session directory can be taken, which means no
+/// process holds it any more. A directory without one is still being made
+fn lock_is_free(root: &Path) -> bool {
+    std::fs::File::open(root.join(LOCK_FILE)).is_ok_and(|lock| lock.try_lock().is_ok())
+}
+
+/// The working directory a transcripts directory belongs to, as Claude Code
+/// recorded it in a transcript. Only the start of the file is read: the line
+/// that carries it can hold the whole patch, and a cwd not found there leaves
+/// the directory alone
+fn transcript_cwd(transcripts: &Path) -> Option<PathBuf> {
+    use std::io::{BufRead, Read};
+    const READ_LIMIT: u64 = 4 << 20;
+    let entries = std::fs::read_dir(transcripts).ok()?;
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .find_map(|path| {
+            let file = std::fs::File::open(path).ok()?;
+            std::io::BufReader::new(file.take(READ_LIMIT))
+                .lines()
+                .map_while(Result::ok)
+                .find_map(|line| {
+                    let record: serde_json::Value = serde_json::from_str(&line).ok()?;
+                    Some(PathBuf::from(record.get("cwd")?.as_str()?))
+                })
+        })
+}
+
+/// The directories in dir, by path and name. Unreadable entries are skipped:
+/// the sweep is best effort and runs again on the next start
+fn dir_entries(dir: &Path) -> Vec<(PathBuf, String)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|entry| Some((entry.path(), entry.file_name().into_string().ok()?)))
+        .collect()
 }
 
 #[derive(Clone)]
@@ -413,6 +565,105 @@ mod tests {
         sessions.inner.lock().unwrap().by_key.contains_key(&key)
     }
 
+    const BOOT: &str = "1111aaaa";
+    const EARLIER_BOOT: &str = "2222bbbb";
+
+    /// A session directory under temp as SessionDir lays it out, with a
+    /// transcripts directory in projects whose transcript records its cwd
+    fn session_files(temp: &Path, projects: &Path, name: &str, lock: bool) -> (PathBuf, PathBuf) {
+        let root = temp.join(name);
+        std::fs::create_dir_all(root.join("cwd")).unwrap();
+        if lock {
+            std::fs::write(root.join(LOCK_FILE), "").unwrap();
+        }
+        (root.clone(), transcript(projects, &root.join("cwd")))
+    }
+
+    fn transcript(projects: &Path, cwd: &Path) -> PathBuf {
+        let dir = transcripts_dir_in(projects, cwd).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = serde_json::json!({"type": "user", "cwd": cwd});
+        std::fs::write(
+            dir.join("s.jsonl"),
+            format!("{{\"type\":\"mode\"}}\n{record}\n"),
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_sweep_removes_only_what_a_dead_process_left() {
+        let temp = tempfile::tempdir().unwrap();
+        let temp = std::fs::canonicalize(temp.path()).unwrap();
+        let projects = tempfile::tempdir().unwrap();
+        let projects = projects.path();
+        let name = |boot: &str, rest: &str| format!("{}{rest}", dir_prefix(boot));
+
+        let (dead, dead_transcripts) = session_files(&temp, projects, &name(BOOT, "a"), true);
+        let (live, live_transcripts) = session_files(&temp, projects, &name(BOOT, "b"), true);
+        let held = std::fs::File::open(live.join(LOCK_FILE)).unwrap();
+        held.lock().unwrap();
+        let (old, _) = session_files(&temp, projects, &name(EARLIER_BOOT, "c"), false);
+        let (unlocked, _) = session_files(&temp, projects, &name(BOOT, "d"), false);
+        std::fs::create_dir(temp.join("other-e")).unwrap();
+
+        let gone_root = temp.join(name(EARLIER_BOOT, "f"));
+        let gone_transcripts = transcript(projects, &gone_root.join("cwd"));
+        let this_boot_gone = transcript(projects, &temp.join(name(BOOT, "g")).join("cwd"));
+        let lookalike = temp.join(format!("sashiko_claude_{EARLIER_BOOT}_h"));
+        let lookalike_transcripts = transcript(projects, &lookalike.join("cwd"));
+        let unrecorded =
+            transcripts_dir_in(projects, &temp.join(name(EARLIER_BOOT, "i")).join("cwd")).unwrap();
+        std::fs::create_dir(&unrecorded).unwrap();
+
+        remove_orphans(&temp, projects, BOOT);
+
+        assert!(!dead.exists());
+        assert!(!dead_transcripts.exists());
+        assert!(live.exists(), "a held lock means its process is alive");
+        assert!(live_transcripts.exists());
+        assert!(!old.exists(), "nothing from an earlier boot is alive");
+        assert!(
+            unlocked.exists(),
+            "a directory without a lock is still being made"
+        );
+        assert!(temp.join("other-e").exists());
+        assert!(!gone_transcripts.exists());
+        assert!(
+            this_boot_gone.exists(),
+            "its directory may sit in another namespace's /tmp"
+        );
+        assert!(
+            lookalike_transcripts.exists(),
+            "a name that dashes the same is not ours"
+        );
+        assert!(unrecorded.exists());
+        drop(held);
+    }
+
+    #[test]
+    fn a_session_directory_names_its_boot_and_holds_its_lock() {
+        let dir = SessionDir::new().unwrap();
+        let name = dir.root.file_name().unwrap().to_str().unwrap();
+        assert_eq!(dir_boot(name), Some(this_boot()));
+        assert!(!lock_is_free(&dir.root));
+        assert!(dir.path().read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn a_name_without_a_boot_owns_nothing() {
+        for name in [
+            "sashiko-claude-1111aaaa",
+            "sashiko-claude-1111aaaa-",
+            "sashiko-claude-1111aaa-x",
+            "sashiko-claude-1111aaxz-x",
+            "other-1111aaaa-x",
+            "",
+        ] {
+            assert_eq!(dir_boot(name), None, "{name}");
+        }
+    }
+
     #[tokio::test]
     async fn a_request_continues_the_session_that_answered_its_history() {
         let sessions = Sessions::default();
@@ -631,24 +882,22 @@ mod tests {
     #[test]
     fn an_exit_finds_every_live_session_directory() {
         let dir = SessionDir::new().unwrap();
-        let cwd = dir.path().to_path_buf();
-        let live = || LIVE_DIRS.lock().unwrap().contains(&cwd);
+        let root = dir.root.clone();
+        let live = || LIVE_DIRS.lock().unwrap().contains(&root);
         assert!(live(), "remove_session_files reaches it on exit");
         drop(dir);
         assert!(!live());
-        assert!(!cwd.exists());
+        assert!(!root.exists());
     }
 
     #[test]
     fn removal_takes_the_transcripts_too() {
-        let cwd = tempfile::tempdir().unwrap().keep();
+        let temp = tempfile::tempdir().unwrap();
         let projects = tempfile::tempdir().unwrap();
-        let transcripts = transcripts_dir_in(projects.path(), &cwd).unwrap();
-        std::fs::create_dir(&transcripts).unwrap();
-        std::fs::write(transcripts.join("session.jsonl"), "{}").unwrap();
+        let (root, transcripts) = session_files(temp.path(), projects.path(), "s", true);
 
-        remove_files(&cwd, Some(projects.path()));
-        assert!(!cwd.exists());
+        remove_files(&root, Some(projects.path()));
+        assert!(!root.exists());
         assert!(!transcripts.exists());
     }
 
