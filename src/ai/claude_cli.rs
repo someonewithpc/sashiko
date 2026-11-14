@@ -52,8 +52,8 @@ use crate::ai::{
     ProviderCapabilities, cache_identity_with,
 };
 use crate::utils::{redact_secret, utf8_prefix};
-pub use sessions::remove_session_files;
 use sessions::{Lineage, PrefixKey, Session, SessionDir, Sessions, release_dir};
+pub use sessions::{remove_orphaned_session_files, remove_session_files};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClaudeCliError {

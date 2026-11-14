@@ -122,7 +122,8 @@ Context window sizes:
   removes them with the working directory at the first claude-cli call after
   a session has gone unused for an hour, the prompt cache's lifetime, or when
   more than 256 sessions are kept. It also removes them all when it exits,
-  and on SIGINT, SIGTERM or SIGHUP.
+  and on SIGINT, SIGTERM or SIGHUP. What a process killed with SIGKILL left
+  behind is removed the next time Sashiko creates a claude-cli provider.
 - Requests that offer Sashiko tools also pass `--json-schema`, so the model
   replies with a `tool_calls` or `content` object through Claude Code's
   StructuredOutput tool instead of free text. This needs a Claude Code version
