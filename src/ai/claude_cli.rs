@@ -196,10 +196,11 @@ impl Version {
     }
 }
 
-/// The oldest Claude Code that takes every flag build_claude_args passes.
-/// An older one rejects the first flag it does not know, and that error says
-/// nothing about the version
-const MIN_CLAUDE_CODE: Version = Version(2, 1, 308);
+/// The oldest Claude Code known to take every flag build_claude_args
+/// passes: --exclude-dynamic-system-prompt-sections was verified with
+/// 2.1.323. An older one rejects the first flag it does not know, and that
+/// error says nothing about the version
+const MIN_CLAUDE_CODE: Version = Version(2, 1, 323);
 
 const VERSION_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -294,8 +295,9 @@ fn build_prompt(request: &AiRequest) -> String {
 /// Returns the argv passed to `claude` (the prompt goes on stdin). Extracted
 /// so tests can assert that no tool survives.
 pub fn build_claude_args(model: &str, effort: Option<&str>, has_tools: bool) -> Vec<String> {
-    // Isolation arguments/settings verified with Claude Code 2.1.170, and
-    // --json-schema with 2.1.308
+    // Isolation arguments/settings verified with Claude Code 2.1.170,
+    // --json-schema with 2.1.308 and --exclude-dynamic-system-prompt-sections
+    // with 2.1.323
     let mut args = vec![
         "--print".to_string(),
         "--output-format".to_string(),
@@ -318,6 +320,10 @@ pub fn build_claude_args(model: &str, effort: Option<&str>, has_tools: bool) -> 
             "claudeMdExcludes": ["**"],
         })
         .to_string(),
+        // The working directory is part of the dynamic sections, and every
+        // conversation has its own, so with them in the system prompt no two
+        // conversations share a cached prefix
+        "--exclude-dynamic-system-prompt-sections".to_string(),
         "--model".to_string(),
         model.to_string(),
     ];
@@ -593,6 +599,12 @@ mod tests {
         assert_eq!(args[denied + 1], "mcp__*");
         assert!(args.contains(&"--strict-mcp-config".to_string()));
         assert!(args.contains(&"--print".to_string()));
+    }
+
+    #[test]
+    fn test_claude_args_keep_the_system_prompt_the_same_in_every_directory() {
+        let args = build_claude_args("sonnet", None, false);
+        assert!(args.contains(&"--exclude-dynamic-system-prompt-sections".to_string()));
     }
 
     #[test]
