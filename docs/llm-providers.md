@@ -83,8 +83,10 @@ Uses a local [Claude Code](https://claude.com/claude-code) installation as
 the completion backend. This uses your Claude Code subscription -- no
 per-token charge, no API key.
 
-**Prerequisites:** Install Claude Code and sign in. Verify with
-`claude --version`.
+**Prerequisites:** Install Claude Code 2.1.308 or later and sign in.
+Verify with `claude --version`. Sashiko asks for the version before its
+first call and stops with an error naming both versions when the installed
+one is older. Update with `claude update`.
 
 **Apply the example config:**
 

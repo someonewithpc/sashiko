@@ -516,3 +516,58 @@ async fn a_failed_first_turn_leaves_no_session_files() {
     let (cwd, _, _) = call_record(&fixture, 1);
     assert!(!cwd.exists());
 }
+
+fn version_cli(answer: &str) -> tempfile::TempDir {
+    cli_script(&format!(
+        "#!/bin/sh\n[ \"$1\" = --version ] && echo '{answer}'\n"
+    ))
+}
+
+#[tokio::test]
+async fn an_outdated_claude_code_is_refused_before_the_first_call() {
+    let fixture = version_cli("2.1.170 (Claude Code)");
+    let provider = ClaudeCliProvider::new("test-model".to_string(), None);
+    let error = provider
+        .refuse_outdated(fixture.path().join("claude").as_os_str())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ClaudeCliError::TooOld {
+            found: Version(2, 1, 170)
+        }
+    ));
+    assert_eq!(error.ai_error_class(), AiErrorClass::Fatal);
+    assert!(error.to_string().contains("2.1.170"));
+    assert!(error.to_string().contains(&MIN_CLAUDE_CODE.to_string()));
+
+    let asked = fixture.path().join("asked");
+    crate::test_support::write_executable_script(
+        &fixture.path().join("claude"),
+        &format!(
+            "#!/bin/sh\ntouch '{}'\necho '{MIN_CLAUDE_CODE} (Claude Code)'\n",
+            asked.display()
+        ),
+    );
+    provider
+        .refuse_outdated(fixture.path().join("claude").as_os_str())
+        .await
+        .expect("an update is seen without a restart");
+    assert!(asked.exists(), "the updated claude was asked again");
+}
+
+#[tokio::test]
+async fn a_current_or_unreadable_version_is_let_through() {
+    for answer in [
+        &format!("{MIN_CLAUDE_CODE} (Claude Code)"),
+        "3.0.0 (Claude Code)",
+        "unknown",
+    ] {
+        let fixture = version_cli(answer);
+        let provider = ClaudeCliProvider::new("test-model".to_string(), None);
+        provider
+            .refuse_outdated(fixture.path().join("claude").as_os_str())
+            .await
+            .unwrap_or_else(|e| panic!("{answer}: {e}"));
+    }
+}

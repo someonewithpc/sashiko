@@ -75,6 +75,10 @@ pub enum ClaudeCliError {
     Parse(String),
     #[error("claude CLI returned an empty reply to a request with tools")]
     EmptyReply,
+    #[error(
+        "Claude Code {found} is too old for the claude-cli provider, which needs {MIN_CLAUDE_CODE} or later. Run claude update"
+    )]
+    TooOld { found: Version },
 }
 
 impl ClassifyAiError for ClaudeCliError {
@@ -120,6 +124,7 @@ impl ClassifyAiError for ClaudeCliError {
             ClaudeCliError::EmptyReply => AiErrorClass::Transient {
                 retry_after: Duration::from_secs(30),
             },
+            ClaudeCliError::TooOld { .. } => AiErrorClass::Fatal,
         }
     }
 }
@@ -171,11 +176,78 @@ fn extract_cli_result(outer: &Value, has_schema: bool) -> Result<String, ClaudeC
     Ok(result)
 }
 
+/// A Claude Code release, as claude --version reports it
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Version(u32, u32, u32);
+
+impl std::fmt::Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.0, self.1, self.2)
+    }
+}
+
+impl Version {
+    /// Reads the release from the start of claude --version output, such as
+    /// "2.1.308 (Claude Code)"
+    fn parse(output: &str) -> Option<Self> {
+        let mut parts = output.split_whitespace().next()?.splitn(3, '.');
+        let mut next = || parts.next()?.parse().ok();
+        Some(Self(next()?, next()?, next()?))
+    }
+}
+
+/// The oldest Claude Code that takes every flag build_claude_args passes.
+/// An older one rejects the first flag it does not know, and that error says
+/// nothing about the version
+const MIN_CLAUDE_CODE: Version = Version(2, 1, 308);
+
+const VERSION_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Asks the binary for its version, and returns it when it is older than
+/// MIN_CLAUDE_CODE. A binary that cannot be asked, or answers in a form
+/// this does not read, is let through: the call itself then fails with its
+/// own error, or works
+async fn outdated_version(binary: &std::ffi::OsStr) -> Option<Version> {
+    let mut command = Command::new(binary);
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let output = match tokio::time::timeout(VERSION_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) if output.status.success() => output,
+        Ok(Ok(output)) => {
+            warn!("claude --version exited with {}", output.status);
+            return None;
+        }
+        Ok(Err(e)) => {
+            warn!("Failed to run claude --version: {e}");
+            return None;
+        }
+        Err(_) => {
+            warn!("claude --version gave no answer in {VERSION_TIMEOUT:?}");
+            return None;
+        }
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let Some(found) = Version::parse(&text) else {
+        warn!(
+            "Could not read the Claude Code version from {:?}",
+            text.trim()
+        );
+        return None;
+    };
+    (found < MIN_CLAUDE_CODE).then_some(found)
+}
+
 #[derive(Default)]
 pub struct ClaudeCliProvider {
     pub model: String,
     pub effort: Option<String>,
     sessions: Sessions,
+    /// Set once the installed Claude Code is known to be new enough. A
+    /// refusal is not kept, so a claude update takes effect without a restart
+    version_ok: tokio::sync::OnceCell<()>,
 }
 
 impl ClaudeCliProvider {
@@ -184,6 +256,7 @@ impl ClaudeCliProvider {
             model,
             effort,
             sessions: Sessions::default(),
+            version_ok: tokio::sync::OnceCell::new(),
         }
     }
 }
@@ -263,6 +336,18 @@ pub fn build_claude_args(model: &str, effort: Option<&str>, has_tools: bool) -> 
 }
 
 impl ClaudeCliProvider {
+    async fn refuse_outdated(&self, binary: &std::ffi::OsStr) -> Result<(), ClaudeCliError> {
+        self.version_ok
+            .get_or_try_init(|| async {
+                match outdated_version(binary).await {
+                    Some(found) => Err(ClaudeCliError::TooOld { found }),
+                    None => Ok(()),
+                }
+            })
+            .await
+            .map(|_| ())
+    }
+
     async fn generate_content_with_binary(
         &self,
         request: AiRequest,
@@ -406,7 +491,9 @@ impl ClaudeCliProvider {
 #[async_trait]
 impl AiProvider for ClaudeCliProvider {
     async fn generate_content(&self, request: AiRequest) -> Result<AiResponse> {
-        self.generate_content_with_binary(request, std::ffi::OsStr::new("claude"), IDLE_TIMEOUT)
+        let binary = std::ffi::OsStr::new("claude");
+        self.refuse_outdated(binary).await?;
+        self.generate_content_with_binary(request, binary, IDLE_TIMEOUT)
             .await
     }
 
