@@ -57,15 +57,17 @@ const IDLE_LIFETIME: Duration = Duration::from_secs(60 * 60);
 /// destructor
 static LIVE_DIRS: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(Default::default);
 
-/// A working directory, the lock that says its process is alive, and the
-/// transcripts Claude Code keeps for it.
+/// A working directory, the system prompt file for the conversation run in
+/// it, the lock that says its process is alive, and the transcripts Claude
+/// Code keeps for it.
 ///
 /// Claude Code files a session under the directory it ran in, and `--resume`
 /// looks it up there, so every turn of a conversation runs in the same one.
-/// The working directory is empty: the lock sits next to it, in a temporary
-/// directory that holds both.
+/// The working directory is empty: the system prompt and the lock sit next
+/// to it, in a temporary directory that holds all three.
 pub(super) struct SessionDir {
     root: PathBuf,
+    system_prompt: Option<PathBuf>,
     /// Held for as long as the session lives. The kernel releases it when the
     /// process dies, however it dies, so a sweep that can take it knows the
     /// directory was left behind
@@ -73,7 +75,10 @@ pub(super) struct SessionDir {
 }
 
 impl SessionDir {
-    pub(super) fn new() -> std::io::Result<Self> {
+    /// Creates the directories and writes the system prompt, once for the
+    /// whole conversation, so turns resumed in parallel never read a file
+    /// another turn is still writing
+    pub(super) fn new(system_prompt: Option<&str>) -> std::io::Result<Self> {
         let root = tempfile::Builder::new()
             .prefix(&dir_prefix(this_boot()))
             .tempdir()?
@@ -83,16 +88,29 @@ impl SessionDir {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(root.clone());
-        let mut dir = Self { root, lock: None };
+        let mut dir = Self {
+            root,
+            system_prompt: None,
+            lock: None,
+        };
         let lock = std::fs::File::create(dir.root.join(LOCK_FILE))?;
         lock.lock()?;
         dir.lock = Some(lock);
         std::fs::create_dir(dir.path())?;
+        if let Some(text) = system_prompt {
+            let path = dir.root.join("system-prompt");
+            std::fs::write(&path, text)?;
+            dir.system_prompt = Some(path);
+        }
         Ok(dir)
     }
 
     pub(super) fn path(&self) -> PathBuf {
         self.root.join("cwd")
+    }
+
+    pub(super) fn system_prompt(&self) -> Option<&Path> {
+        self.system_prompt.as_deref()
     }
 }
 
@@ -552,7 +570,7 @@ mod tests {
     fn session(id: &str) -> Session {
         Session {
             id: id.to_string(),
-            dir: Arc::new(SessionDir::new().unwrap()),
+            dir: Arc::new(SessionDir::new(None).unwrap()),
         }
     }
 
@@ -643,7 +661,7 @@ mod tests {
 
     #[test]
     fn a_session_directory_names_its_boot_and_holds_its_lock() {
-        let dir = SessionDir::new().unwrap();
+        let dir = SessionDir::new(None).unwrap();
         let name = dir.root.file_name().unwrap().to_str().unwrap();
         assert_eq!(dir_boot(name), Some(this_boot()));
         assert!(!lock_is_free(&dir.root));
@@ -771,7 +789,7 @@ mod tests {
     async fn a_continued_session_keeps_its_parent_and_frees_its_grandparent() {
         let sessions = Sessions::default();
         let first = session("s1");
-        let cwd = first.dir.path().to_path_buf();
+        let cwd = first.dir.path();
         sessions.keep([1; 32], first.clone(), None).await;
         sessions.keep([2; 32], first.clone(), Some([1; 32])).await;
         assert!(
@@ -881,7 +899,7 @@ mod tests {
 
     #[test]
     fn an_exit_finds_every_live_session_directory() {
-        let dir = SessionDir::new().unwrap();
+        let dir = SessionDir::new(Some("system")).unwrap();
         let root = dir.root.clone();
         let live = || LIVE_DIRS.lock().unwrap().contains(&root);
         assert!(live(), "remove_session_files reaches it on exit");
